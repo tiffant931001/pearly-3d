@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v7 · 拖曳旋轉 · 點一下 · 點兩下揮手</div>
+<div id="hint">v8 · 拖曳旋轉 · 點一下 · 點兩下揮手</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -32,6 +32,7 @@ const EXPR = Q.get('expr');            // smile | neutral | sad（測試用）
 const FORCE_BLINK = Q.has('blink');
 const SHOW_BLUSH = Q.has('blush');
 const WAVEAT = Q.has('waveat') ? parseFloat(Q.get('waveat')) : null;
+const WAMP = Q.has('wamp') ? parseFloat(Q.get('wamp')) : 0.46;
 if (Q.has('key')) document.body.style.background = '#00ff00';
 
 /* ── 場景 ───────────────────────────────── */
@@ -191,20 +192,24 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       for (let i=0;i<cAttr.count;i++){ r+=cAttr.getX(i); g+=cAttr.getY(i); b+=cAttr.getZ(i); }
       const n = cAttr.count; mc.setRGB(r/n, g/n, b/n);
     }
-    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 140;
+    // 用「管子」做嘴巴（跟 ^ 一樣是真幾何，不會被臉切到）
+    // 用「畫上去的圓角線條」做嘴巴：乾淨、不出現切面
+    const cv = document.createElement('canvas'); cv.width = 512; cv.height = 180;
     const g2 = cv.getContext('2d');
-    g2.strokeStyle = '#fff'; g2.lineWidth = 76; g2.lineCap = 'round';
+    g2.strokeStyle = '#fff'; g2.lineWidth = 108; g2.lineCap = 'round';
     g2.beginPath();
-    g2.moveTo(18, 54);
-    g2.quadraticCurveTo(128, 96, 238, 54);   // 中間低、兩端微上揚
+    g2.moveTo(70, 78);
+    g2.quadraticCurveTo(256, 108, 442, 78);   // 中間微微低、兩端微上揚
     g2.stroke();
-    const ltex = new THREE.CanvasTexture(cv); ltex.colorSpace = THREE.SRGBColorSpace;
+    const ltex = new THREE.CanvasTexture(cv);
+    ltex.colorSpace = THREE.SRGBColorSpace;
+    ltex.anisotropy = 8;
     const line = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.100, 0.055),
+      new THREE.PlaneGeometry(0.082, 0.029),
       new THREE.MeshBasicMaterial({ map: ltex, color: mc, transparent: true, depthWrite: false, toneMapped: false })
     );
     const p0 = parts.mouth.position;
-    line.position.set(p0.x, p0.y - 0.002, p0.z + 0.004);
+    line.position.set(p0.x, p0.y + 0.002, p0.z + (Q.has('mz') ? parseFloat(Q.get('mz')) : 0.025));
     line.visible = false;
     parts.mouth.parent.add(line);
     parts.mouthLine = line;
@@ -255,7 +260,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
   camera.position.set(0, 0.05, 6.2);
   fitCamera();
-  if (Q.has('dbg')) document.title = 'V ' + window.__vert;
+  if (Q.has('dbg')) { const m=parts.mouth; document.title = m ? `mr=${m.rotation.x.toFixed(2)},${m.rotation.y.toFixed(2)},${m.rotation.z.toFixed(2)} mp=${m.position.x.toFixed(3)},${m.position.y.toFixed(3)},${m.position.z.toFixed(3)} ms=${m.scale.x.toFixed(2)},${m.scale.y.toFixed(2)},${m.scale.z.toFixed(2)}` : 'no mouth'; }
   if (Q.has('yaw'))   { yaw = parseFloat(Q.get('yaw')); }
   if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
   if (Q.has('expr'))  { expr = Q.get('expr'); applyExpression(true); }
@@ -350,7 +355,7 @@ function fitCamera(){
   const halfW = modelW * baseScale / 2;     // 角色實際橫向半寬（含耳朵）
   const dH = (modelH*baseScale/2 * 1.02) / tan;
   const dW = (halfW * 1.06) / (tan * camera.aspect);
-  camera.position.z = Math.max(dH, dW);
+  camera.position.z = Math.max(dH, dW) * (1 + 0.075 * (window.__waveZoom || 0));
   camera.lookAt(0, 0, 0);
 }
 
@@ -384,18 +389,27 @@ function tick(){
     // 靜止基準
     hop.scale.set(baseScale, baseScale, baseScale);
 
-    // 極輕微浮動（待機 C）
-    if (!FREEZE) hop.position.y += Math.sin(t * 1.6) * 0.0016 - hop.position.y * 0.08;
 
-    // 揮手（點兩下觸發）
+    // 揮手（點兩下觸發）：平滑進出 + 手臂前傾 + 身體側傾
     if (waveT >= 0 || WAVEAT !== null) {
       waveT = (WAVEAT !== null) ? WAVEAT : waveT + dt;
-      const DUR = 1.7;
-      const p = waveT / DUR;
-      const env = p < 0.18 ? p / 0.18 : (p > 0.82 ? (1 - p) / 0.18 : 1);
-      const ang = (-0.38 + Math.sin(waveT * 17) * 0.12) * env;
-      if (parts.armWave) parts.armWave.rotation.z = ang;
-      if (waveT > DUR) { waveT = -1; if (parts.armWave) parts.armWave.rotation.z = 0; }
+      const DUR = 1.9;
+      const p = Math.min(waveT / DUR, 1);
+      const ss = x => x * x * (3 - 2 * x);
+      const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
+      const ang = (-WAMP + Math.sin(waveT * 15) * 0.13) * env2;
+      if (parts.armWave) {
+        parts.armWave.rotation.z = ang;
+        parts.armWave.rotation.x = -0.30 * env2;
+      }
+      hop.rotation.z = 0.030 * env2;     // 身體往揮手那側輕輕傾
+      window.__waveZoom = env2; if (typeof fitCamera === 'function') fitCamera();
+      if (waveT > DUR) {
+        waveT = -1;
+        if (parts.armWave) { parts.armWave.rotation.z = 0; parts.armWave.rotation.x = 0; }
+        hop.rotation.z = 0;
+        window.__waveZoom = 0; fitCamera();
+      }
     }
 
     // 耳朵偶爾抖一下（待機 C）
@@ -405,11 +419,11 @@ function tick(){
         if (!g) return;
         if (earTwitch[i] < 0) {
           nextTwitch[i] -= dt;
-          if (nextTwitch[i] <= 0) { earTwitch[i] = 0; nextTwitch[i] = 6 + Math.random() * 4; }
+          if (nextTwitch[i] <= 0) { earTwitch[i] = 0; nextTwitch[i] = 4 + Math.random() * 4; }
         } else {
           earTwitch[i] += dt;
-          const k = earTwitch[i] / 0.42;
-          g.rotation.z = Math.sin(earTwitch[i] * 30) * 0.07 * (1 - k) * g.userData.innerSign;
+          const k = earTwitch[i] / 0.50;
+          g.rotation.z = Math.sin(earTwitch[i] * 26) * 0.115 * (1 - k) * g.userData.innerSign;
           if (k >= 1) { earTwitch[i] = -1; g.rotation.z = 0; }
         }
       });
@@ -428,7 +442,7 @@ function tick(){
     if (Math.abs(squash) < 0.004) squash = 0;
     hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
     hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
-    if (Q.has('dbg')) document.title = `arms=${parts.arms.length} ears=${parts.ears.length} wave=${waveT.toFixed(2)} rot=${(parts.armWave?parts.armWave.rotation.z:0).toFixed(3)}`;
+    if (Q.has('dbg')) document.title = `mr=${parts.mouth.rotation.z.toFixed(3)} ms=${parts.mouth.scale.x.toFixed(2)},${parts.mouth.scale.y.toFixed(2)} mp=${parts.mouth.position.x.toFixed(3)},${parts.mouth.position.y.toFixed(3)},${parts.mouth.position.z.toFixed(3)}`;
 
     // 眨眼
     if (FREEZE) {
