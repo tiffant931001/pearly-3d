@@ -172,7 +172,6 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
-    const ovalTex = ovalTexture();
     [[-1], [1]].forEach(([sx]) => {
       // 橫向霧狀腮紅帶
       const m = new THREE.Mesh(
@@ -187,17 +186,6 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       parts.head.parent.add(m);
       blush.push(m);
 
-      // 眼下那條手畫的小橢圓（她畫的黑線）
-      const o = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.19, 0.12),
-        new THREE.MeshBasicMaterial({
-          map: ovalTex, transparent: true, depthWrite: false,
-          opacity: 0.9, toneMapped: false
-        })
-      );
-      o.position.set(sx * 0.155, -0.135, 0.452);
-      o.rotation.set(0, sx * 0.20, sx * 0.10);
-      parts.head.parent.add(o);
     });
   }
 
