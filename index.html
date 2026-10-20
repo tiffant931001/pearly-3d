@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v14 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v15 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -456,24 +456,22 @@ function tick(){
       const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
       const g = parts.handWave;
       if (g) {
-        const sx = g.userData.innerSign;           // 往身體外側
         if (g.userData.baseX === undefined) g.userData.baseX = g.position.x;
         if (g.userData.baseY === undefined) g.userData.baseY = g.position.y;
         if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
-        if (g.userData.baseY2 === undefined) g.userData.baseY2 = g.userData.baseY;
-        const swing = Math.sin(waveT * 13) * 0.012;
-        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.030 * env2);
-        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.055 * env2 + swing * env2;
-        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.070 * env2;
-        const sc = 1 + 0.12 * env2;
-        g.scale.setScalar(sc);
-        const WROT = Q.has('wrot') ? parseFloat(Q.get('wrot')) : 0.36;
-        g.rotation.z = (WROT + Math.sin(waveT * 13) * 0.10) * env2 * -g.userData.innerSign;
+        const swing = Math.sin(waveT * 11);
+        const lift  = Math.sin(waveT * 11 + 0.6);
+        // 往鏡頭方向抬起（繞 X 軸）＋ 上下擺 → 有深度的手揮動
+        g.rotation.x = (-0.70 + swing * 0.22) * env2;
+        g.rotation.z = (-0.18 + swing * 0.10) * env2 * -g.userData.innerSign;
+        g.position.y = g.userData.baseY + (0.130 + lift * 0.045) * env2;
+        g.position.z = g.userData.baseZ + (0.150 + swing * 0.030) * env2;
+        g.position.x = g.userData.baseX - g.userData.innerSign * 0.020 * env2;
       }
       hop.rotation.z = 0.020 * env2;
       if (waveT > DUR) {
         waveT = -1;
-        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.position.z = g.userData.baseZ; g.rotation.z = 0; g.scale.setScalar(1); }
+        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.position.z = g.userData.baseZ; g.rotation.set(0,0,0); g.scale.setScalar(1); }
         hop.rotation.z = 0;
         window.__waveZoom = 0; fitCamera();
       }
