@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
-<title>角色動態</title>
+<title>角色</title>
 <style>
   html,body{margin:0;height:100%;overflow:hidden;
     background:linear-gradient(180deg,#d4f4ff 0%,#dfe3ff 34%,#e6d2ff 66%,#eda8fe 100%);}
@@ -13,19 +13,27 @@
     color:#8a6a9e;opacity:.45;pointer-events:none;user-select:none}
 </style>
 <script type="importmap">
-{"imports":{"three":"https://unpkg.com/three@0.186.0/build/three.module.js"}}
+{"imports":{
+  "three":"./vendor/three.module.js",
+  "three/addons/":"./vendor/addons/"
+}}
 </script>
 </head>
 <body>
-<div id="hint">點它一下</div>
+<div id="hint">拖曳旋轉 · 點一下</div>
 <script type="module">
 import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const Q = new URLSearchParams(location.search);
-const FREEZE = Q.has('still'), FORCE_BLINK = Q.has('blink');
+const FREEZE = Q.has('still'), LIT = Q.has('lit');
+const EXPR = Q.get('expr');            // smile | neutral | sad（測試用）
+const FORCE_BLINK = Q.has('blink');
+const SHOW_BLUSH = Q.has('blush');
 if (Q.has('key')) document.body.style.background = '#00ff00';
 
-/* ── 基本設定 ───────────────────────────────── */
+/* ── 場景 ───────────────────────────────── */
 const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
 renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
 renderer.setSize(innerWidth, innerHeight);
@@ -34,103 +42,192 @@ renderer.toneMapping = THREE.NoToneMapping;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 50);
-const holder = new THREE.Group();          // 整體漂浮 / 呼吸 / 擠壓
-scene.add(holder);
+const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 60);
 
-/* 圖層設定：z 越小越後面 */
-const LAYERS = [
-  {name:'under', z:-0.085, pivot:null},
-  {name:'earL',  z:-0.062, pivot:true},
-  {name:'earR',  z:-0.062, pivot:true},
-  {name:'armL',  z:-0.042, pivot:true},
-  {name:'armR',  z:-0.042, pivot:true},
-  {name:'body',  z:-0.020, pivot:null},
-  {name:'eyeL',  z: 0.002, pivot:true, eye:true},
-  {name:'eyeR',  z: 0.002, pivot:true, eye:true}
-];
+// 光只加很淡的一層：主要明暗其實畫在頂點色裡（跟原圖一致）
+scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, LIT ? 1.6 : 1.78));
+const key = new THREE.DirectionalLight(0xffffff, LIT ? 1.2 : 0.46); key.position.set(0.8, 2.2, 3.2);
+const fill = new THREE.DirectionalLight(0xffeef8, LIT ? 0.45 : 0.22); fill.position.set(-3, 0.6, 1.6);
+scene.add(key, fill);
 
-let loaded = false, W = 1, H = 1, S = 1;
-const parts = {};                      // name -> {group, mesh, pivot}
-const eyes = [];
+const spin = new THREE.Group();       // 水平旋轉（360°）
+const tiltOuter = new THREE.Group();  // 上下俯仰
+tiltOuter.add(spin);
+scene.add(tiltOuter);
+const hop = new THREE.Group();        // 跳躍 / 擠壓
+spin.add(hop);
+
+/* ── 狀態 ───────────────────────────────── */
+let loaded = false, baseScale = 1, modelH = 1;
+const parts = { ears: [], eyes: [], mouth: null, head: null };
+const blush = [];
 const clock = new THREE.Clock();
-let t = 0, blinkT = -1, nextBlink = 2.6, squash = 0, squashV = 0;
-const pointer = {x:0, y:0}, pointerS = {x:0, y:0};
+let t = 0;
+let yaw = 0, pitch = 0, yawV = 0, pitchV = 0;      // 拖曳
+let dragging = false, lastX = 0, lastY = 0, lastMove = 0;
+let expr = EXPR || 'smile';
+let blinkT = -1, nextBlink = 3.0;
+let blushAmt = 0, blushTarget = 0;
+let squash = 0, squashV = 0, jumpY = 0, jumpV = 0;
 const easeInOut = x => x < 0.5 ? 2*x*x : 1 - Math.pow(-2*x+2, 2)/2;
 
-/* ── 載入圖層 ───────────────────────────────── */
-const loader = new THREE.TextureLoader();
-const metaP = fetch('./layers.json').then(r => r.json());
-
-metaP.then(meta => {
-  W = meta.w; H = meta.h;
-  S = 2.0 / H;                          // 讓圖片高度 = 2 個世界單位
-  const texPromises = LAYERS.map(L => new Promise(res => {
-    loader.load(`./${L.name}.webp`, tex => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.minFilter = THREE.LinearFilter;
-      tex.magFilter = THREE.LinearFilter;
-      tex.generateMipmaps = false;
-      res({L, tex});
-    });
-  }));
-
-  Promise.all(texPromises).then(list => {
-    const planeW = W * S, planeH = H * S;
-
-    list.forEach(({L, tex}) => {
-      const geo = new THREE.PlaneGeometry(planeW, planeH);
-      const mat = new THREE.MeshBasicMaterial({
-        map: tex, transparent: true, depthWrite: false,
-        alphaTest: 0.01, toneMapped: false
-      });
-      const mesh = new THREE.Mesh(geo, mat);
-      const g = new THREE.Group();
-
-      const piv = L.pivot && meta.parts[L.name] ? meta.parts[L.name].pivot : null;
-      if (piv) {
-        const px = (piv[0] - W/2) * S;         // 樞紐的世界座標
-        const py = (H/2 - piv[1]) * S;
-        g.position.set(px, py, L.z);
-        mesh.position.set(-px, -py, 0);
-      } else {
-        g.position.set(0, 0, L.z);
-      }
-      g.add(mesh);
-      holder.add(g);
-      parts[L.name] = {group: g, mesh, pivot: piv};
-      if (L.eye) eyes.push({group: g, baseY: g.position.y});
-    });
-
-    loaded = true;
-    fitCamera();
-    window.__ready = true;
-    if (Q.has('debug')) {
-      const v = new THREE.Vector3();
-      const proj = (x) => { v.set(x, 0, 0).project(camera); return +((v.x*0.5+0.5)*innerWidth).toFixed(1); };
-      const d = document.createElement('pre');
-      d.id = 'dbg';
-      d.textContent = JSON.stringify({
-        W, H, S, aspect: +camera.aspect.toFixed(4), camZ: +camera.position.z.toFixed(3),
-        planeH: +(H*S).toFixed(3), planeW: +(W*S).toFixed(3),
-        screenLeft: proj(-W*S/2), screenRight: proj(W*S/2), vw: innerWidth, vh: innerHeight
-      });
-      document.body.appendChild(d);
-    }
-  });
-}).catch(e => { window.__err = String(e); });
-
-/* ── 鏡頭：依畫面比例自動取景 ────────────────── */
-let modelSize = null;
-function fitCamera(){
-  const w = W * S, h = H * S;
-  modelSize = {x: w, y: h};
-  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
-  const dH = (h/2 * 1.06) / tan;
-  const dW = (w/2 * 1.14) / (tan * camera.aspect);
-  camera.position.set(0, 0, Math.max(dH, dW));
-  camera.lookAt(0, 0, 0);
+/* ── 腮紅貼圖（粉紅徑向漸層）── */
+function blushTexture(){
+  const s = 128, c = document.createElement('canvas');
+  c.width = c.height = s;
+  const g = c.getContext('2d');
+  const grd = g.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
+  grd.addColorStop(0,   'rgba(255,255,255,1)');
+  grd.addColorStop(0.45,'rgba(255,255,255,0.75)');
+  grd.addColorStop(1,   'rgba(255,255,255,0)');
+  g.fillStyle = grd; g.fillRect(0,0,s,s);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
 }
+
+/* ── 載入模型 ───────────────────────────── */
+new GLTFLoader().load('./model/character.glb', (gltf) => {
+  const src = gltf.scene;
+  src.updateMatrixWorld(true);
+  const meshes = [];
+  src.traverse(o => { if (o.isMesh) meshes.push(o); });
+
+  const body = new THREE.Group();
+  const tex = blushTexture();
+
+  meshes.forEach(o => {
+    let geo = o.geometry.clone();
+    geo.applyMatrix4(o.matrixWorld);
+    // 把重複頂點合併 → 法線才會平滑（原檔是逐面拆開的，否則會一片片硬邊）
+    const vBefore = geo.attributes.position.count;
+    try { geo = mergeVertices(geo, 1e-3); } catch (err) {}
+    window.__vert = (window.__vert || '') + vBefore + '->' + geo.attributes.position.count + ' ';
+    geo.computeBoundingBox();
+    const c = geo.boundingBox.getCenter(new THREE.Vector3());
+    const size = geo.boundingBox.getSize(new THREE.Vector3());
+    geo.translate(-c.x, -c.y, -c.z);
+    geo.computeVertexNormals();
+
+    // 頂點色比原畫鮮豔很多 → 用 gamma 提亮／降對比，讓它接近原圖的奶感
+    const GAM = Q.has('gam') ? parseFloat(Q.get('gam')) : 0.74;
+    const ca = geo.attributes.color;
+    if (ca && GAM !== 1) {
+      for (let i = 0; i < ca.count; i++) {
+        ca.setXYZ(i, Math.pow(ca.getX(i), GAM), Math.pow(ca.getY(i), GAM), Math.pow(ca.getZ(i), GAM));
+      }
+      ca.needsUpdate = true;
+    }
+
+    const mat = Q.has('basic')
+      ? new THREE.MeshBasicMaterial({ vertexColors: true })
+      : new THREE.MeshStandardMaterial({
+          vertexColors: true, roughness: 1, metalness: 0,
+          flatShading: false, side: THREE.FrontSide,
+          emissive: 0xffffff, emissiveIntensity: 0.10   // 牛奶感：整體提亮、壓低對比
+        });
+    const mesh = new THREE.Mesh(geo, mat);
+    mesh.position.copy(c);
+    mesh.userData.size = size;
+    mesh.userData.center = c.clone();
+    body.add(mesh);
+
+    const ax = Math.abs(c.x);
+    if (size.z < 0.12 && size.x < 0.25 && size.y > 0.15 && c.z > 0.35) parts.eyes.push(mesh);
+    else if (size.y < 0.12 && size.x < 0.15 && c.z > 0.35) parts.mouth = mesh;
+    else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) parts.ears.push(mesh);
+    else if (size.x > 0.9) parts.head = mesh;
+  });
+
+  // 置中 + 縮放（高度 = 2）
+  body.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(body);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  body.position.sub(center);
+  baseScale = 2.0 / size.y;
+  modelH = size.y;
+  hop.scale.setScalar(baseScale);
+  hop.add(body);
+
+  /* 腮紅：貼在臉頰，朝外 */
+  if (parts.head) {
+    [[-1, 0.31], [1, 0.31]].forEach(([sx]) => {
+      const m = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.30, 0.30),
+        new THREE.MeshBasicMaterial({
+          map: tex, color: 0xff86bd, transparent: true, depthWrite: false,
+          opacity: 0, toneMapped: false, blending: THREE.NormalBlending
+        })
+      );
+      m.position.set(sx * 0.31, -0.055, 0.435);
+      m.rotation.y = sx * 0.42;
+      parts.head.parent.add(m);
+      blush.push(m);
+    });
+  }
+
+  camera.position.set(0, 0.05, 6.2);
+  fitCamera();
+  if (Q.has('dbg')) document.title = 'V ' + window.__vert;
+  if (Q.has('yaw'))   { yaw = parseFloat(Q.get('yaw')); }
+  if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
+  if (Q.has('expr'))  { expr = Q.get('expr'); applyExpression(true); }
+  loaded = true;
+  window.__ready = true;
+  if (Q.has('auto')) { setTimeout(() => tap(), 550); }
+}, undefined, e => { window.__err = String(e); });
+
+/* ── 表情 ───────────────────────────────── */
+const EXPRS = ['smile', 'neutral', 'sad'];
+function setEyeOpen(v){ parts.eyes.forEach(e => { e.scale.y = v; }); }
+function applyExpression(instant){
+  const m = parts.mouth;
+  if (!m) return;
+  if (expr === 'smile')      { m.rotation.z = 0;        m.scale.set(1, 1, 1); }
+  if (expr === 'neutral')    { m.rotation.z = 0;        m.scale.set(1, 0.18, 1); }
+  if (expr === 'sad')        { m.rotation.z = Math.PI;  m.scale.set(1, 1, 1); }
+  blushTarget = (expr === 'sad') ? 0.0 : (expr === 'smile' ? 0.55 : 0.25);
+}
+
+/* ── 互動 ───────────────────────────────── */
+const el = renderer.domElement;
+el.addEventListener('pointerdown', e => {
+  dragging = true; lastX = e.clientX; lastY = e.clientY; lastMove = performance.now();
+  el.setPointerCapture(e.pointerId);
+});
+el.addEventListener('pointermove', e => {
+  if (!dragging) return;
+  const dx = e.clientX - lastX, dy = e.clientY - lastY;
+  lastX = e.clientX; lastY = e.clientY;
+  const K = 0.012;
+  yaw   += dx * K;                       // 直接跟手
+  pitch += dy * K * 0.55;
+  yawV   = dx * K * 14;                  // 放開後的慣性
+  pitchV = dy * K * 8;
+  lastMove = performance.now();
+  if (Math.abs(dx) + Math.abs(dy) > 2) el.dataset.dragged = '1';
+});
+el.addEventListener('pointerup', e => {
+  dragging = false;
+  el.releasePointerCapture?.(e.pointerId);
+  if (el.dataset.dragged !== '1') tap();
+  el.dataset.dragged = '0';
+});
+
+let tapCount = 0;
+function tap(){
+  // 1) 跳一下：先壓再彈起
+  squashV -= 4.4;
+  jumpV = 3.1;
+  // 2) 腮紅閃一下
+  blushAmt = Math.max(blushAmt, 0.9);
+  // 3) 換表情
+  tapCount++;
+  expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
+  applyExpression();
+}
+
 addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
@@ -138,82 +235,84 @@ addEventListener('resize', () => {
   if (loaded) fitCamera();
 });
 
-/* ── 互動 ───────────────────────────────────── */
-renderer.domElement.addEventListener('pointerdown', () => {
-  squashV += 6.5;
-  if (Math.random() < 0.6) blinkT = 0;
-});
-addEventListener('pointermove', e => {
-  pointer.x = (e.clientX/innerWidth)*2 - 1;
-  pointer.y = (e.clientY/innerHeight)*2 - 1;
-});
-
-/* ── 動畫參數 ───────────────────────────────── */
-const BREATH = 3.4;      // 一秒一個完整呼吸
-const EAR_LAG = 0.14;    // 耳朵落後
-const ARM_LAG = 0.24;    // 手臂落後更多
-const EAR_AMP = 0.030;   // 約 1.7 度
-const ARM_AMP = 0.017;   // 約 1 度
-
-function setEyeOpen(v){
-  eyes.forEach(e => { e.group.scale.y = v; });
+function fitCamera(){
+  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+  const halfW = 0.95;                       // 角色橫向半寬（含耳朵）
+  const dH = (modelH*baseScale/2 * 1.10) / tan;
+  const dW = (halfW * baseScale * 1.10) / (tan * camera.aspect);
+  camera.position.z = Math.max(dH, dW);
+  camera.lookAt(0, 0, 0);
 }
 
+/* ── 主迴圈 ─────────────────────────────── */
 function tick(){
   const dt = Math.min(clock.getDelta(), 0.05);
   if (!FREEZE) t += dt;
 
   if (loaded) {
-    const ph = (t / BREATH) * Math.PI * 2;
+    // 拖曳慣性 + 靜止 2.5 秒後慢慢轉回正面
+    if (!dragging) {
+      yaw   += yawV * dt;
+      pitch += pitchV * dt;
+      yawV *= 0.90; pitchV *= 0.90;
+      const idle = performance.now() - lastMove;
+      if (!FREEZE && idle > 900 && Math.abs(yawV) < 0.35 && Math.abs(pitchV) < 0.35) {
+        const twoPi = Math.PI * 2;
+        const nearest = Math.round(yaw / twoPi) * twoPi;   // 最短角度回正面
+        yaw   += (nearest - yaw) * Math.min(1, dt * 3.0);
+        pitch += (0 - pitch)      * Math.min(1, dt * 3.6);
+      }
+    }
+    pitch = THREE.MathUtils.clamp(pitch, -0.55, 0.55);
+    spin.rotation.y = yaw;
+    tiltOuter.rotation.x = pitch;
 
-    holder.position.y = Math.sin(ph) * 0.022;
+    const ph = (t / 3.4) * Math.PI * 2;
 
-    const br = Math.sin(ph) * 0.008;
-    holder.scale.set(1 - br*0.4, 1 + br, 1);
+    // 呼吸
+    const br = Math.sin(ph) * 0.012;
+    hop.scale.set(baseScale*(1 - br*0.5), baseScale*(1 + br), baseScale*(1 - br*0.5));
 
-    // 耳朵：同一波形、晚 0.14 秒（左右反向）
-    const ep = ((t - EAR_LAG) / BREATH) * Math.PI * 2;
-    const rest = FREEZE ? 0 : 1;
-    ['earL','earR'].forEach(k => {
-      const p = parts[k]; if (!p || !p.pivot) return;
-      const sgn = p.group.position.x < 0 ? 1 : -1;
-      p.group.rotation.z = Math.sin(ep) * EAR_AMP * sgn * rest;
+    // 耳朵延遲擺動（左右各轉一點）
+    parts.ears.forEach((e, i) => {
+      const ep = ((t - 0.14) / 3.4) * Math.PI * 2;
+      const sgn = e.userData.center.x > 0 ? -1 : 1;
+      e.rotation.z = Math.sin(ep) * 0.035 * sgn;
     });
 
-    // 手臂：晚 0.24 秒、週期略不同（避免機械同步感）
-    const ap = ((t - ARM_LAG) / (BREATH*1.12)) * Math.PI * 2;
-    ['armL','armR'].forEach(k => {
-      const p = parts[k]; if (!p || !p.pivot) return;
-      const sgn = p.group.position.x < 0 ? -1 : 1;
-      p.group.rotation.z = Math.sin(ap) * ARM_AMP * sgn * rest;
-    });
+    // 跳躍（重力）
+    if (!FREEZE || jumpY !== 0) {
+      jumpV -= 10.0 * dt;
+      jumpY += jumpV * dt;
+      if (jumpY < 0) { jumpY = 0; jumpV = 0; squashV += 3.0; }   // 落地壓一下
+      hop.position.y = jumpY;
+    }
+
+    // 落地擠壓彈簧
+    squashV += (-70 * squash - 9.0 * squashV) * dt;
+    squash += squashV * dt;
+    hop.scale.x *= 1 - squash * 0.22;
+    hop.scale.y *= 1 + squash * 0.16;
 
     // 眨眼
     if (FREEZE) {
-      if (FORCE_BLINK) setEyeOpen(0.07);
+      if (FORCE_BLINK) setEyeOpen(0.06);
     } else {
       nextBlink -= dt;
-      if (nextBlink <= 0 && blinkT < 0) { blinkT = 0; nextBlink = 2.6 + Math.random()*3.2; }
+      if (nextBlink <= 0 && blinkT < 0) { blinkT = 0; nextBlink = 2.8 + Math.random()*3.4; }
       if (blinkT >= 0) {
         blinkT += dt;
         const d = 0.13;
         const k = blinkT < d/2 ? blinkT/(d/2) : Math.max(0, 1 - (blinkT - d/2)/(d/2));
-        setEyeOpen(1 - 0.93 * easeInOut(k));
+        setEyeOpen(1 - 0.94 * easeInOut(k));
         if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
       }
     }
 
-    // 點一下：擠壓再彈回
-    squashV += (-62 * squash - 8.0 * squashV) * dt;
-    squash += squashV * dt;
-    holder.scale.x *= 1 - squash * 0.28;
-    holder.scale.y *= 1 + squash * 0.16;
-
-    // 指標視差（幅度刻意很小，2D 圖轉太多會露破綻）
-    pointerS.x += (pointer.x * 0.045 - pointerS.x) * Math.min(1, dt*4);
-    pointerS.y += (pointer.y * 0.028 - pointerS.y) * Math.min(1, dt*4);
-    holder.rotation.y = pointerS.x;
-    holder.rotation.x = -pointerS.y;
+    // 腮紅：點擊閃一下，再慢慢退
+    if (SHOW_BLUSH) blushAmt = 0.85;
+    blushAmt += (blushTarget - blushAmt) * Math.min(1, dt*1.8);
+    blush.forEach(b => { b.material.opacity = Math.max(0, blushAmt) * 0.85; });
   }
 
   renderer.render(scene, camera);

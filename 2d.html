@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>角色動態</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;
+    background:linear-gradient(180deg,#d4f4ff 0%,#dfe3ff 34%,#e6d2ff 66%,#eda8fe 100%);}
+  canvas{display:block;touch-action:none;-webkit-tap-highlight-color:transparent}
+  #hint{position:fixed;left:0;right:0;bottom:16px;text-align:center;
+    font:13px/1.4 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;
+    color:#8a6a9e;opacity:.45;pointer-events:none;user-select:none}
+</style>
+<script type="importmap">
+{"imports":{"three":"https://unpkg.com/three@0.186.0/build/three.module.js"}}
+</script>
+</head>
+<body>
+<div id="hint">點它一下</div>
+<script type="module">
+import * as THREE from 'three';
+
+const Q = new URLSearchParams(location.search);
+const FREEZE = Q.has('still'), FORCE_BLINK = Q.has('blink');
+if (Q.has('key')) document.body.style.background = '#00ff00';
+
+/* ── 基本設定 ───────────────────────────────── */
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 50);
+const holder = new THREE.Group();          // 整體漂浮 / 呼吸 / 擠壓
+scene.add(holder);
+
+/* 圖層設定：z 越小越後面 */
+const LAYERS = [
+  {name:'under', z:-0.085, pivot:null},
+  {name:'earL',  z:-0.062, pivot:true},
+  {name:'earR',  z:-0.062, pivot:true},
+  {name:'armL',  z:-0.042, pivot:true},
+  {name:'armR',  z:-0.042, pivot:true},
+  {name:'body',  z:-0.020, pivot:null},
+  {name:'eyeL',  z: 0.002, pivot:true, eye:true},
+  {name:'eyeR',  z: 0.002, pivot:true, eye:true}
+];
+
+let loaded = false, W = 1, H = 1, S = 1;
+const parts = {};                      // name -> {group, mesh, pivot}
+const eyes = [];
+const clock = new THREE.Clock();
+let t = 0, blinkT = -1, nextBlink = 2.6, squash = 0, squashV = 0;
+const pointer = {x:0, y:0}, pointerS = {x:0, y:0};
+const easeInOut = x => x < 0.5 ? 2*x*x : 1 - Math.pow(-2*x+2, 2)/2;
+
+/* ── 載入圖層 ───────────────────────────────── */
+const loader = new THREE.TextureLoader();
+const metaP = fetch('./layers.json').then(r => r.json());
+
+metaP.then(meta => {
+  W = meta.w; H = meta.h;
+  S = 2.0 / H;                          // 讓圖片高度 = 2 個世界單位
+  const texPromises = LAYERS.map(L => new Promise(res => {
+    loader.load(`./${L.name}.webp`, tex => {
+      tex.colorSpace = THREE.SRGBColorSpace;
+      tex.minFilter = THREE.LinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.generateMipmaps = false;
+      res({L, tex});
+    });
+  }));
+
+  Promise.all(texPromises).then(list => {
+    const planeW = W * S, planeH = H * S;
+
+    list.forEach(({L, tex}) => {
+      const geo = new THREE.PlaneGeometry(planeW, planeH);
+      const mat = new THREE.MeshBasicMaterial({
+        map: tex, transparent: true, depthWrite: false,
+        alphaTest: 0.01, toneMapped: false
+      });
+      const mesh = new THREE.Mesh(geo, mat);
+      const g = new THREE.Group();
+
+      const piv = L.pivot && meta.parts[L.name] ? meta.parts[L.name].pivot : null;
+      if (piv) {
+        const px = (piv[0] - W/2) * S;         // 樞紐的世界座標
+        const py = (H/2 - piv[1]) * S;
+        g.position.set(px, py, L.z);
+        mesh.position.set(-px, -py, 0);
+      } else {
+        g.position.set(0, 0, L.z);
+      }
+      g.add(mesh);
+      holder.add(g);
+      parts[L.name] = {group: g, mesh, pivot: piv};
+      if (L.eye) eyes.push({group: g, baseY: g.position.y});
+    });
+
+    loaded = true;
+    fitCamera();
+    window.__ready = true;
+    if (Q.has('debug')) {
+      const v = new THREE.Vector3();
+      const proj = (x) => { v.set(x, 0, 0).project(camera); return +((v.x*0.5+0.5)*innerWidth).toFixed(1); };
+      const d = document.createElement('pre');
+      d.id = 'dbg';
+      d.textContent = JSON.stringify({
+        W, H, S, aspect: +camera.aspect.toFixed(4), camZ: +camera.position.z.toFixed(3),
+        planeH: +(H*S).toFixed(3), planeW: +(W*S).toFixed(3),
+        screenLeft: proj(-W*S/2), screenRight: proj(W*S/2), vw: innerWidth, vh: innerHeight
+      });
+      document.body.appendChild(d);
+    }
+  });
+}).catch(e => { window.__err = String(e); });
+
+/* ── 鏡頭：依畫面比例自動取景 ────────────────── */
+let modelSize = null;
+function fitCamera(){
+  const w = W * S, h = H * S;
+  modelSize = {x: w, y: h};
+  const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
+  const dH = (h/2 * 1.06) / tan;
+  const dW = (w/2 * 1.14) / (tan * camera.aspect);
+  camera.position.set(0, 0, Math.max(dH, dW));
+  camera.lookAt(0, 0, 0);
+}
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  if (loaded) fitCamera();
+});
+
+/* ── 互動 ───────────────────────────────────── */
+renderer.domElement.addEventListener('pointerdown', () => {
+  squashV += 6.5;
+  if (Math.random() < 0.6) blinkT = 0;
+});
+addEventListener('pointermove', e => {
+  pointer.x = (e.clientX/innerWidth)*2 - 1;
+  pointer.y = (e.clientY/innerHeight)*2 - 1;
+});
+
+/* ── 動畫參數 ───────────────────────────────── */
+const BREATH = 3.4;      // 一秒一個完整呼吸
+const EAR_LAG = 0.14;    // 耳朵落後
+const ARM_LAG = 0.24;    // 手臂落後更多
+const EAR_AMP = 0.030;   // 約 1.7 度
+const ARM_AMP = 0.017;   // 約 1 度
+
+function setEyeOpen(v){
+  eyes.forEach(e => { e.group.scale.y = v; });
+}
+
+function tick(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!FREEZE) t += dt;
+
+  if (loaded) {
+    const ph = (t / BREATH) * Math.PI * 2;
+
+    holder.position.y = Math.sin(ph) * 0.022;
+
+    const br = Math.sin(ph) * 0.008;
+    holder.scale.set(1 - br*0.4, 1 + br, 1);
+
+    // 耳朵：同一波形、晚 0.14 秒（左右反向）
+    const ep = ((t - EAR_LAG) / BREATH) * Math.PI * 2;
+    const rest = FREEZE ? 0 : 1;
+    ['earL','earR'].forEach(k => {
+      const p = parts[k]; if (!p || !p.pivot) return;
+      const sgn = p.group.position.x < 0 ? 1 : -1;
+      p.group.rotation.z = Math.sin(ep) * EAR_AMP * sgn * rest;
+    });
+
+    // 手臂：晚 0.24 秒、週期略不同（避免機械同步感）
+    const ap = ((t - ARM_LAG) / (BREATH*1.12)) * Math.PI * 2;
+    ['armL','armR'].forEach(k => {
+      const p = parts[k]; if (!p || !p.pivot) return;
+      const sgn = p.group.position.x < 0 ? -1 : 1;
+      p.group.rotation.z = Math.sin(ap) * ARM_AMP * sgn * rest;
+    });
+
+    // 眨眼
+    if (FREEZE) {
+      if (FORCE_BLINK) setEyeOpen(0.07);
+    } else {
+      nextBlink -= dt;
+      if (nextBlink <= 0 && blinkT < 0) { blinkT = 0; nextBlink = 2.6 + Math.random()*3.2; }
+      if (blinkT >= 0) {
+        blinkT += dt;
+        const d = 0.13;
+        const k = blinkT < d/2 ? blinkT/(d/2) : Math.max(0, 1 - (blinkT - d/2)/(d/2));
+        setEyeOpen(1 - 0.93 * easeInOut(k));
+        if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
+      }
+    }
+
+    // 點一下：擠壓再彈回
+    squashV += (-62 * squash - 8.0 * squashV) * dt;
+    squash += squashV * dt;
+    holder.scale.x *= 1 - squash * 0.28;
+    holder.scale.y *= 1 + squash * 0.16;
+
+    // 指標視差（幅度刻意很小，2D 圖轉太多會露破綻）
+    pointerS.x += (pointer.x * 0.045 - pointerS.x) * Math.min(1, dt*4);
+    pointerS.y += (pointer.y * 0.028 - pointerS.y) * Math.min(1, dt*4);
+    holder.rotation.y = pointerS.x;
+    holder.rotation.x = -pointerS.y;
+  }
+
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(tick);
+</script>
+</body>
+</html>
