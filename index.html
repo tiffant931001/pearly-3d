@@ -45,10 +45,14 @@ const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 60);
 
 // 光只加很淡的一層：主要明暗其實畫在頂點色裡（跟原圖一致）
-scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, LIT ? 1.6 : 1.78));
-const key = new THREE.DirectionalLight(0xffffff, LIT ? 1.2 : 0.46); key.position.set(0.8, 2.2, 3.2);
-const fill = new THREE.DirectionalLight(0xffeef8, LIT ? 0.45 : 0.22); fill.position.set(-3, 0.6, 1.6);
-scene.add(key, fill);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.55));
+const key = new THREE.DirectionalLight(0xffffff, Q.has('keyi') ? parseFloat(Q.get('keyi')) : 0.32); key.position.set(0.8, 2.2, 3.2);
+const fill = new THREE.DirectionalLight(0xffeef8, 0.22); fill.position.set(-3, 0.6, 1.6);
+// 左右側光：把耳朵/手臂外側提亮（原畫的柔和均勻感）
+const SID = Q.has('sid') ? parseFloat(Q.get('sid')) : 1.00;
+const sidL = new THREE.DirectionalLight(0xffffff, SID); sidL.position.set(-3.2, 0.4, 0.6);
+const sidR = new THREE.DirectionalLight(0xffffff, SID); sidR.position.set( 3.2, 0.4, 0.6);
+scene.add(key, fill, sidL, sidR);
 
 const spin = new THREE.Group();       // 水平旋轉（360°）
 const tiltOuter = new THREE.Group();  // 上下俯仰
@@ -58,8 +62,8 @@ const hop = new THREE.Group();        // 跳躍 / 擠壓
 spin.add(hop);
 
 /* ── 狀態 ───────────────────────────────── */
-let loaded = false, baseScale = 1, modelH = 1;
-const parts = { ears: [], eyes: [], mouth: null, head: null };
+let loaded = false, baseScale = 1, modelH = 1, modelW = 1;
+const parts = { ears: [], eyes: [], arms: [], mouth: null, head: null };
 const blush = [];
 const clock = new THREE.Clock();
 let t = 0;
@@ -71,16 +75,31 @@ let blushAmt = 0, blushTarget = 0;
 let squash = 0, squashV = 0, jumpY = 0, jumpV = 0;
 const easeInOut = x => x < 0.5 ? 2*x*x : 1 - Math.pow(-2*x+2, 2)/2;
 
-/* ── 腮紅貼圖（粉紅徑向漸層）── */
+/* ── 腮紅貼圖（照她手畫的樣式：橫向霧狀帶 + 眼下小黑橢圓）── */
 function blushTexture(){
-  const s = 128, c = document.createElement('canvas');
-  c.width = c.height = s;
+  const w = 256, h = 256, c = document.createElement('canvas');
+  c.width = w; c.height = h;
   const g = c.getContext('2d');
-  const grd = g.createRadialGradient(s/2, s/2, 0, s/2, s/2, s/2);
-  grd.addColorStop(0,   'rgba(255,255,255,1)');
-  grd.addColorStop(0.45,'rgba(255,255,255,0.75)');
-  grd.addColorStop(1,   'rgba(255,255,255,0)');
-  g.fillStyle = grd; g.fillRect(0,0,s,s);
+  const gr = g.createRadialGradient(w/2, h/2, 0, w/2, h/2, w/2);
+  gr.addColorStop(0.00, 'rgba(255,255,255,0.95)');
+  gr.addColorStop(0.32, 'rgba(255,255,255,0.80)');
+  gr.addColorStop(0.62, 'rgba(255,255,255,0.35)');
+  gr.addColorStop(1.00, 'rgba(255,255,255,0)');
+  g.fillStyle = gr; g.fillRect(0, 0, w, h);
+  const tex = new THREE.CanvasTexture(c);
+  tex.colorSpace = THREE.SRGBColorSpace;
+  return tex;
+}
+
+function ovalTexture(){
+  const w = 256, h = 160, c = document.createElement('canvas');
+  c.width = w; c.height = h;
+  const g = c.getContext('2d');
+  g.strokeStyle = '#232323'; g.lineWidth = 7; g.lineCap = 'round';
+  g.beginPath();
+  // 手繪感：稍微歪、不完全閉合
+  g.ellipse(w*0.5, h*0.5, w*0.36, h*0.30, -0.12, 0.15, Math.PI*1.92);
+  g.stroke();
   const tex = new THREE.CanvasTexture(c);
   tex.colorSpace = THREE.SRGBColorSpace;
   return tex;
@@ -110,7 +129,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     geo.computeVertexNormals();
 
     // 頂點色比原畫鮮豔很多 → 用 gamma 提亮／降對比，讓它接近原圖的奶感
-    const GAM = Q.has('gam') ? parseFloat(Q.get('gam')) : 0.74;
+    const GAM = Q.has('gam') ? parseFloat(Q.get('gam')) : 0.70;
     const ca = geo.attributes.color;
     if (ca && GAM !== 1) {
       for (let i = 0; i < ca.count; i++) {
@@ -124,7 +143,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       : new THREE.MeshStandardMaterial({
           vertexColors: true, roughness: 1, metalness: 0,
           flatShading: false, side: THREE.FrontSide,
-          emissive: 0xffffff, emissiveIntensity: 0.10   // 牛奶感：整體提亮、壓低對比
+          emissive: 0xffffff, emissiveIntensity: 0.03   // 極輕微提亮，避免死黑
         });
     const mesh = new THREE.Mesh(geo, mat);
     mesh.position.copy(c);
@@ -135,6 +154,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     const ax = Math.abs(c.x);
     if (size.z < 0.12 && size.x < 0.25 && size.y > 0.15 && c.z > 0.35) parts.eyes.push(mesh);
     else if (size.y < 0.12 && size.x < 0.15 && c.z > 0.35) parts.mouth = mesh;
+    else if (ax > 0.45 && size.y > 0.90) { mesh.material.color.setScalar(1.30); parts.arms.push(mesh); }
     else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) parts.ears.push(mesh);
     else if (size.x > 0.9) parts.head = mesh;
   });
@@ -146,24 +166,38 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   const center = box.getCenter(new THREE.Vector3());
   body.position.sub(center);
   baseScale = 2.0 / size.y;
-  modelH = size.y;
+  modelH = size.y; modelW = size.x;
   hop.scale.setScalar(baseScale);
   hop.add(body);
 
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
-    [[-1, 0.31], [1, 0.31]].forEach(([sx]) => {
+    const ovalTex = ovalTexture();
+    [[-1], [1]].forEach(([sx]) => {
+      // 橫向霧狀腮紅帶
       const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.30, 0.30),
+        new THREE.PlaneGeometry(0.62, 0.30),
         new THREE.MeshBasicMaterial({
-          map: tex, color: 0xff86bd, transparent: true, depthWrite: false,
+          map: tex, color: 0xff74b0, transparent: true, depthWrite: false,
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
         })
       );
-      m.position.set(sx * 0.31, -0.055, 0.435);
-      m.rotation.y = sx * 0.42;
+      m.position.set(sx * 0.27, -0.03, 0.437);
+      m.rotation.y = sx * 0.34;
       parts.head.parent.add(m);
       blush.push(m);
+
+      // 眼下那條手畫的小橢圓（她畫的黑線）
+      const o = new THREE.Mesh(
+        new THREE.PlaneGeometry(0.19, 0.12),
+        new THREE.MeshBasicMaterial({
+          map: ovalTex, transparent: true, depthWrite: false,
+          opacity: 0.9, toneMapped: false
+        })
+      );
+      o.position.set(sx * 0.155, -0.135, 0.452);
+      o.rotation.set(0, sx * 0.20, sx * 0.10);
+      parts.head.parent.add(o);
     });
   }
 
@@ -187,7 +221,7 @@ function applyExpression(instant){
   if (expr === 'smile')      { m.rotation.z = 0;        m.scale.set(1, 1, 1); }
   if (expr === 'neutral')    { m.rotation.z = 0;        m.scale.set(1, 0.18, 1); }
   if (expr === 'sad')        { m.rotation.z = Math.PI;  m.scale.set(1, 1, 1); }
-  blushTarget = (expr === 'sad') ? 0.0 : (expr === 'smile' ? 0.55 : 0.25);
+  blushTarget = 0;   // 靜止時不上腮紅，點了才冒
 }
 
 /* ── 互動 ───────────────────────────────── */
@@ -237,9 +271,9 @@ addEventListener('resize', () => {
 
 function fitCamera(){
   const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
-  const halfW = 0.95;                       // 角色橫向半寬（含耳朵）
-  const dH = (modelH*baseScale/2 * 1.04) / tan;
-  const dW = (halfW * baseScale * 1.05) / (tan * camera.aspect);
+  const halfW = modelW * baseScale / 2;     // 角色實際橫向半寬（含耳朵）
+  const dH = (modelH*baseScale/2 * 1.02) / tan;
+  const dW = (halfW * 1.06) / (tan * camera.aspect);
   camera.position.z = Math.max(dH, dW);
   camera.lookAt(0, 0, 0);
 }
@@ -267,18 +301,8 @@ function tick(){
     spin.rotation.y = yaw;
     tiltOuter.rotation.x = pitch;
 
-    const ph = (t / 3.4) * Math.PI * 2;
-
-    // 呼吸
-    const br = Math.sin(ph) * 0.012;
-    hop.scale.set(baseScale*(1 - br*0.5), baseScale*(1 + br), baseScale*(1 - br*0.5));
-
-    // 耳朵延遲擺動（左右各轉一點）
-    parts.ears.forEach((e, i) => {
-      const ep = ((t - 0.14) / 3.4) * Math.PI * 2;
-      const sgn = e.userData.center.x > 0 ? -1 : 1;
-      e.rotation.z = Math.sin(ep) * 0.035 * sgn;
-    });
+    // 靜止時不動：只有按下才會跳（呼吸起伏已經取消）
+    hop.scale.set(baseScale, baseScale, baseScale);
 
     // 跳躍（重力）
     if (!FREEZE || jumpY !== 0) {
