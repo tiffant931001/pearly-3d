@@ -20,7 +20,8 @@
 </script>
 </head>
 <body>
-<div id="hint">v8 · 拖曳旋轉 · 點一下 · 點兩下揮手</div>
+<div id="hint">v9 · 漂浮待機 · 點一下跳 · 點兩下揮手</div>
+<script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -32,7 +33,8 @@ const EXPR = Q.get('expr');            // smile | neutral | sad（測試用）
 const FORCE_BLINK = Q.has('blink');
 const SHOW_BLUSH = Q.has('blush');
 const WAVEAT = Q.has('waveat') ? parseFloat(Q.get('waveat')) : null;
-const WAMP = Q.has('wamp') ? parseFloat(Q.get('wamp')) : 0.46;
+const TFORCE = Q.has('ft') ? parseFloat(Q.get('ft')) : null;
+const WAMP = Q.has('wamp') ? parseFloat(Q.get('wamp')) : 0.95;
 if (Q.has('key')) document.body.style.background = '#00ff00';
 
 /* ── 場景 ───────────────────────────────── */
@@ -179,9 +181,11 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   const center = box.getCenter(new THREE.Vector3());
   body.position.sub(center);
   baseScale = 2.0 / size.y;
+  window.__bodyBaseY = body.position.y;
   modelH = size.y; modelW = size.x;
   hop.scale.setScalar(baseScale);
   hop.add(body);
+  window.__body = body;
 
   /* 普通表情用的短橫線嘴巴（顏色沿用嘴巴本身的粉紅） */
   if (parts.mouth) {
@@ -226,17 +230,25 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     g.userData.innerSign = innerSign;
     return g;
   }
-  parts.arms.forEach(a => {
-    const c0 = a.userData.center, sz = a.userData.size;
-    const inner = c0.x < 0 ? 1 : -1;
-    const g = addPivot(a, c0.x + inner*sz.x*0.12, c0.y + sz.y*0.42, inner);
-    if (c0.x < 0) parts.armWave = g;    // 畫面左邊那隻手
-    else parts.armOther = g;
-  });
-  parts.ears.forEach(e => {
-    const c0 = e.userData.center, sz = e.userData.size;
-    const inner = c0.x < 0 ? 1 : -1;
-    e.userData.pivot = addPivot(e, c0.x + inner*sz.x*0.22, c0.y - sz.y*0.34, inner);
+  // 用「世界座標」重新認零件：頭髮＝兩大顆、手＝兩顆小錐形、裙子＝中間那片
+  body.updateMatrixWorld(true);
+  parts.hair = []; parts.hands = []; parts.skirt = null;
+  body.children.filter(o => o.isMesh).forEach(o => {
+    const bb = new THREE.Box3().setFromObject(o);
+    const sz = bb.getSize(new THREE.Vector3());
+    const c0 = bb.getCenter(new THREE.Vector3());
+    if (sz.x > 0.50 && sz.y > 0.60 && c0.y > 0.05) {
+      parts.hair.push(o);
+      const inner = c0.x < 0 ? 1 : -1;
+      o.userData.pivot = addPivot(o, c0.x + inner*sz.x*0.20, c0.y + sz.y*0.40, inner);
+    } else if (Math.abs(c0.x) > 0.18 && Math.abs(c0.x) < 0.36 && c0.y < -0.28 && sz.x < 0.45) {
+      parts.hands.push(o);
+      const inner = c0.x < 0 ? 1 : -1;
+      const g = addPivot(o, c0.x + inner*sz.x*0.10, c0.y + sz.y*0.46, inner);
+      if (c0.x < 0) parts.handWave = g; else parts.handOther = g;
+    } else if (Math.abs(c0.x) < 0.06 && sz.x > 0.35 && sz.x < 0.58 && sz.y < 0.36) {
+      parts.skirt = addPivot(o, c0.x, c0.y + sz.y*0.48, 1);
+    }
   });
 
   /* 腮紅：貼在臉頰，朝外 */
@@ -260,6 +272,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
   camera.position.set(0, 0.05, 6.2);
   fitCamera();
+  if (Q.has('list')) { const out=[]; body.traverse(o=>{ if(o.isMesh && o.geometry){ const bb=new THREE.Box3().setFromObject(o); const sz=new THREE.Vector3(); bb.getSize(sz); const c=new THREE.Vector3(); bb.getCenter(c); out.push([o.name, +c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2), +sz.x.toFixed(2), +sz.y.toFixed(2), +sz.z.toFixed(2), o.geometry.attributes.position.count]); } }); document.title = 'LIST'+JSON.stringify(out); }
   if (Q.has('dbg')) { const m=parts.mouth; document.title = m ? `mr=${m.rotation.x.toFixed(2)},${m.rotation.y.toFixed(2)},${m.rotation.z.toFixed(2)} mp=${m.position.x.toFixed(3)},${m.position.y.toFixed(3)},${m.position.z.toFixed(3)} ms=${m.scale.x.toFixed(2)},${m.scale.y.toFixed(2)},${m.scale.z.toFixed(2)}` : 'no mouth'; }
   if (Q.has('yaw'))   { yaw = parseFloat(Q.get('yaw')); }
   if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
@@ -398,23 +411,28 @@ function tick(){
       const ss = x => x * x * (3 - 2 * x);
       const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
       const ang = (-WAMP + Math.sin(waveT * 15) * 0.13) * env2;
-      if (parts.armWave) {
-        parts.armWave.rotation.z = ang;
-        parts.armWave.rotation.x = -0.30 * env2;
+      if (parts.handWave) {
+        parts.handWave.rotation.z = ang * parts.handWave.userData.innerSign * -1;
       }
       hop.rotation.z = 0.030 * env2;     // 身體往揮手那側輕輕傾
       window.__waveZoom = env2; if (typeof fitCamera === 'function') fitCamera();
       if (waveT > DUR) {
         waveT = -1;
-        if (parts.armWave) { parts.armWave.rotation.z = 0; parts.armWave.rotation.x = 0; }
+        if (parts.handWave) { parts.handWave.rotation.z = 0; }
         hop.rotation.z = 0;
         window.__waveZoom = 0; fitCamera();
       }
     }
 
-    // 耳朵偶爾抖一下（待機 C）
+    // 待機：整隻角色上下漂浮（週期 3.4 秒）
     if (!FREEZE) {
-      parts.ears.forEach((e, i) => {
+      const FT = 3.4, FLOAT_A = 0.035;
+      const tt = (TFORCE !== null) ? TFORCE : t;
+      if (window.__body) window.__body.position.y = (window.__bodyBaseY || 0) + FLOAT_A * Math.sin(tt * Math.PI * 2 / FT);
+
+      // 頭髮：慢一點跟上身體，微微左右飄
+      const hairArg = tt * Math.PI * 2 / FT - 0.55;
+      parts.hair.forEach((e, i) => {
         const g = e.userData.pivot;
         if (!g) return;
         if (earTwitch[i] < 0) {
@@ -423,10 +441,18 @@ function tick(){
         } else {
           earTwitch[i] += dt;
           const k = earTwitch[i] / 0.50;
-          g.rotation.z = Math.sin(earTwitch[i] * 26) * 0.115 * (1 - k) * g.userData.innerSign;
-          if (k >= 1) { earTwitch[i] = -1; g.rotation.z = 0; }
+          if (k >= 1) { earTwitch[i] = -1; }
         }
+        const tw = earTwitch[i] >= 0 ? Math.sin(earTwitch[i] * 26) * 0.10 * (1 - earTwitch[i] / 0.50) : 0;
+        g.rotation.z = (0.030 * Math.sin(hairArg + i * 0.25) + tw) * g.userData.innerSign;
       });
+
+      // 裙子：再慢一點，微微前後／左右飄
+      if (parts.skirt) {
+        const skirtArg = tt * Math.PI * 2 / FT - 0.95;
+        parts.skirt.rotation.z = 0.034 * Math.sin(skirtArg);
+        parts.skirt.rotation.x = 0.020 * Math.sin(skirtArg * 0.8 + 1.1);
+      }
     }
 
     // 跳躍（重力）
