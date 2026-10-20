@@ -142,7 +142,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       ? new THREE.MeshBasicMaterial({ vertexColors: true })
       : new THREE.MeshStandardMaterial({
           vertexColors: true, roughness: 1, metalness: 0,
-          flatShading: false, side: THREE.FrontSide,
+          flatShading: !Q.has('smooth'), side: THREE.FrontSide,
           emissive: 0xffffff, emissiveIntensity: 0.03   // 極輕微提亮，避免死黑
         });
     const mesh = new THREE.Mesh(geo, mat);
@@ -175,14 +175,14 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     [[-1], [1]].forEach(([sx]) => {
       // 橫向霧狀腮紅帶
       const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.62, 0.30),
+        new THREE.PlaneGeometry(0.36, 0.36),
         new THREE.MeshBasicMaterial({
-          map: tex, color: 0xff74b0, transparent: true, depthWrite: false,
+          map: tex, color: 0xff8ac4, transparent: true, depthWrite: false,
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
         })
       );
-      m.position.set(sx * 0.27, -0.03, 0.437);
-      m.rotation.y = sx * 0.34;
+      m.position.set(sx * 0.265, -0.055, 0.443);
+      m.rotation.y = sx * 0.28;
       parts.head.parent.add(m);
       blush.push(m);
 
@@ -198,6 +198,10 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   loaded = true;
   window.__ready = true;
   if (Q.has('auto')) { setTimeout(() => tap(), 550); }
+  if (Q.has('taps')) {
+    const n = parseInt(Q.get('taps')) || 3;
+    for (let i = 0; i < n; i++) setTimeout(() => tap(), 500 + i * 220);
+  }
 }, undefined, e => { window.__err = String(e); });
 
 /* ── 表情 ───────────────────────────────── */
@@ -237,13 +241,14 @@ el.addEventListener('pointerup', e => {
   el.dataset.dragged = '0';
 });
 
-let tapCount = 0;
+let tapCount = 0, lastTap = -1e9;
 function tap(){
   // 1) 跳一下：先壓再彈起
-  squashV -= 4.4;
+  squashV -= 3.0;
   jumpV = 3.1;
   // 2) 腮紅閃一下
   blushAmt = Math.max(blushAmt, 0.9);
+  lastTap = performance.now();
   // 3) 換表情
   tapCount++;
   if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
@@ -285,6 +290,10 @@ function tick(){
         pitch += (0 - pitch)      * Math.min(1, dt * 3.6);
       }
     }
+    const ar = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
+    if (Math.abs(ar - camera.aspect) > 1e-3) {
+      camera.aspect = ar; camera.updateProjectionMatrix(); fitCamera();
+    }
     pitch = THREE.MathUtils.clamp(pitch, -0.55, 0.55);
     spin.rotation.y = yaw;
     tiltOuter.rotation.x = pitch;
@@ -296,15 +305,19 @@ function tick(){
     if (!FREEZE || jumpY !== 0) {
       jumpV -= 10.0 * dt;
       jumpY += jumpV * dt;
-      if (jumpY < 0) { jumpY = 0; jumpV = 0; squashV += 3.0; }   // 落地壓一下
+      if (jumpY < 0) { jumpY = 0; jumpV = 0; squashV += 1.8; }   // 落地壓一下
       hop.position.y = jumpY;
     }
 
-    // 落地擠壓彈簧
+    // 落地擠壓彈簧（有硬上限，避免連續點擊累積能量把角色壓扁）
     squashV += (-70 * squash - 9.0 * squashV) * dt;
     squash += squashV * dt;
+    if (!Number.isFinite(squash)) { squash = 0; squashV = 0; }
+    squash = THREE.MathUtils.clamp(squash, -0.55, 0.55);   // 最多 ±12% 變形
+    if (Math.abs(squash) < 0.0015) { squash = 0; squashV *= 0.5; }
     hop.scale.x *= 1 - squash * 0.22;
     hop.scale.y *= 1 + squash * 0.16;
+    if (Q.has('dbg')) document.title = `sq=${squash.toFixed(3)} sx=${hop.scale.x.toFixed(3)} sy=${hop.scale.y.toFixed(3)}`;
 
     // 眨眼
     if (FREEZE) {
@@ -321,9 +334,12 @@ function tick(){
       }
     }
 
+    // 4 秒沒互動 → 表情自動回到笑臉
+    if (expr !== 'smile' && performance.now() - lastTap > 4000) { expr = 'smile'; applyExpression(); }
+
     // 腮紅：點擊閃一下，再慢慢退
     if (SHOW_BLUSH) blushAmt = 0.85;
-    blushAmt += (blushTarget - blushAmt) * Math.min(1, dt*1.8);
+    blushAmt += (blushTarget - blushAmt) * Math.min(1, dt*1.6);
     blush.forEach(b => { b.material.opacity = Math.max(0, blushAmt) * 0.85; });
   }
 
