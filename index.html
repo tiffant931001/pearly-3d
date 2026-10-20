@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v21 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
+<div id="hint">v22 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -285,6 +285,27 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     });
   };
 
+  /* 綠色長條（兩側大片的頭髮）：也給根部樞紐，讓它跟粉紅圓球一起甩 */
+  parts.greenHair = [];
+  body.updateMatrixWorld(true);
+  const _cands = [];
+  body.traverse(o => {
+    if (!o.isMesh) return;
+    if (o === parts.head || o.userData.pivot) return;
+    if ((parts.hair || []).includes(o) || (parts.hands || []).includes(o) || o === parts.skirt) return;
+    _cands.push(o);
+  });
+  _cands.forEach(o => {
+    const bb = new THREE.Box3().setFromObject(o);
+    const sz = bb.getSize(new THREE.Vector3());
+    const c0 = bb.getCenter(new THREE.Vector3());
+    if (sz.y > 0.95 && sz.x > 0.50 && sz.x < 0.85 && o.geometry.attributes.position.count < 400) {
+      parts.greenHair.push(o);
+      const inner = c0.x < 0 ? 1 : -1;
+      o.userData.pivot = addPivot(o, c0.x + inner * sz.x * 0.22, c0.y + sz.y * 0.44, inner);
+    }
+  });
+
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
     const hc = parts.headCenter || new THREE.Vector3(0, 0, 0);
@@ -325,7 +346,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   lastTap = performance.now();
   window.__ready = true;
   if (Q.has('auto')) { setTimeout(() => tap(), 550); }
-  if (Q.has('wave')) { setTimeout(() => { waveT = 0; }, 400); }
+  if (Q.has('wave')) { setTimeout(() => { waveT = 0; expr = 'smile'; applyExpression(true); }, 400); }
   if (Q.has('taps')) {
     const n = parseInt(Q.get('taps')) || 3;
     for (let i = 0; i < n; i++) setTimeout(() => tap(), 500 + i * 220);
@@ -398,14 +419,18 @@ function tap(){
     tapTimes = [];
   } else if (tapTimes.length === 2) {
     clearTimeout(pendingWave);
-    pendingWave = setTimeout(() => { if (tapTimes.length === 2) waveT = 0; }, 280);
+    pendingWave = setTimeout(() => {
+      if (tapTimes.length === 2) { waveT = 0; expr = 'smile'; applyExpression(true); }   // 揮手一定是笑臉
+    }, 280);
   }
   lastTap = now;
 
-  // 4) 換表情
+  // 4) 換表情（揮手期間不改表情，維持笑臉）
   tapCount++;
-  if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
-  applyExpression();
+  const waving = waveT >= 0 || pendingWave !== null || (tapTimes.length === 2);
+  if (tapCount > 1 && !waving) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
+  if (!waving) applyExpression();
+  else { expr = 'smile'; applyExpression(true); }
 }
 
 let _rzTimer = null;
@@ -495,6 +520,19 @@ function tick(){
         // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
         g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
       });
+      // 綠色長條：有重量的甩動（慢 0.08 秒、幅度比粉紅球小一點）
+      (parts.greenHair || []).forEach((e, i) => {
+        const g = e.userData.pivot;
+        if (!g) return;
+        let sw = 0;
+        if (hairSwingT >= 0) {
+          const p = Math.min(Math.max(hairSwingT - 0.08, 0) / 1.0, 1);
+          const out = Math.sin(Math.min(p / 0.32, 1) * Math.PI / 2);
+          const back = p < 0.32 ? 1 : Math.pow(1 - Math.min((p - 0.32) / 0.62, 1), 1.6);
+          sw = 0.070 * out * back;
+        }
+        g.rotation.z = (0.007 * Math.sin(ph0 * 0.85 + i * 1.2) + sw) * g.userData.innerSign;
+      });
       parts.hands.forEach(h => {
         const g = h.userData.pivot;
         if (!g) return;
@@ -507,6 +545,7 @@ function tick(){
       waveT = (WAVEAT !== null) ? WAVEAT : waveT + dt;
       const DUR = 1.9;
       const p = Math.min(waveT / DUR, 1);
+      if (expr !== 'smile') { expr = 'smile'; applyExpression(true); }   // 揮手期間一定是笑臉
       const ss = x => x * x * (3 - 2 * x);
       const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
       const WLIFT = Q.has('wlift') ? parseFloat(Q.get('wlift')) : 0.030;
