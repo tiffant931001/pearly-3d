@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v19 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
+<div id="hint">v20 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -457,20 +457,26 @@ function tick(){
       if (SWINGAT !== null) { hairSwingT = SWINGAT; }
       if (hairSwingT >= 0) {
         hairSwingT += dt;
-        const DUR = 1.05, p = hairSwingT / DUR;
+        const DUR = 1.0, p = hairSwingT / DUR;
         if (p >= 1) { hairSwingT = -1; }
         else {
-          const e = Math.pow(1 - p, 2);
-          // b：兩邊相反方向（一內一外），像被風吹開
-          sw0 = 0.135 * Math.sin(p * Math.PI * 2.6) * e;
-          sw1 = -0.115 * Math.sin((p - 0.07) * Math.PI * 2.6) * e;
+          // 照箭頭：先往外上甩（0→25%），再往下回落（25→70%），最後微彈
+          const out = Math.sin(Math.min(p / 0.30, 1) * Math.PI / 2);
+          const back = p < 0.30 ? 0 : Math.pow(1 - Math.min((p - 0.30) / 0.62, 1), 1.6);
+          const base = 0.085 * out * (p < 0.30 ? 1 : back);
+          const bounce = p > 0.55 ? 0.018 * Math.sin((p - 0.55) * Math.PI * 5) * Math.pow(1 - p, 2) : 0;
+          sw0 = base + bounce;
+          const p2 = p - 0.06;
+          const out2 = p2 <= 0 ? 0 : Math.sin(Math.min(p2 / 0.30, 1) * Math.PI / 2);
+          const back2 = p2 < 0.30 ? 1 : Math.pow(1 - Math.min((p2 - 0.30) / 0.62, 1), 1.6);
+          sw1 = 0.078 * out2 * back2 + (p2 > 0.55 ? 0.016 * Math.sin((p2 - 0.55) * Math.PI * 5) * Math.pow(1 - p2, 2) : 0);
         }
       }
       parts.hair.forEach((h, i) => {
         const g = h.userData.pivot;
         if (!g) return;
         // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
-        g.rotation.z = (0.012 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
+        g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
       });
       parts.hands.forEach(h => {
         const g = h.userData.pivot;
@@ -495,10 +501,10 @@ function tick(){
         if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
         const swing = Math.sin(waveT * 9.5);
         // i 版：往斜上舉到胸口外側（不往前伸），只做小幅左右擺
-        g.rotation.z = (-0.42 + swing * 0.10) * env2 * -g.userData.innerSign;
-        g.rotation.x = (-0.16 + swing * 0.05) * env2;
-        g.position.x = g.userData.baseX - g.userData.innerSign * 0.035 * env2;
-        g.position.y = g.userData.baseY + (0.055 + swing * 0.012) * env2;
+        g.rotation.z = (-0.26 + swing * 0.07) * env2 * -g.userData.innerSign;
+        g.rotation.x = (-0.10 + swing * 0.03) * env2;
+        g.position.x = g.userData.baseX - g.userData.innerSign * 0.022 * env2;
+        g.position.y = g.userData.baseY + (0.022 + swing * 0.008) * env2;
         g.position.z = g.userData.baseZ + 0.030 * env2;
       }
       hop.rotation.z = 0.020 * env2;
