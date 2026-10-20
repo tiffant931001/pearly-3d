@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">拖曳旋轉 · 點一下</div>
+<div id="hint">v4 · 拖曳旋轉 · 點一下</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -35,7 +35,7 @@ if (Q.has('key')) document.body.style.background = '#00ff00';
 
 /* ── 場景 ───────────────────────────────── */
 const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
-renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setPixelRatio(Math.min(devicePixelRatio, 3));
 renderer.setSize(innerWidth, innerHeight);
 renderer.outputColorSpace = THREE.SRGBColorSpace;
 renderer.toneMapping = THREE.NoToneMapping;
