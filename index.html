@@ -224,7 +224,7 @@ function tap(){
   blushAmt = Math.max(blushAmt, 0.9);
   // 3) 換表情
   tapCount++;
-  expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
+  if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
   applyExpression();
 }
 
@@ -238,8 +238,8 @@ addEventListener('resize', () => {
 function fitCamera(){
   const tan = Math.tan(THREE.MathUtils.degToRad(camera.fov/2));
   const halfW = 0.95;                       // 角色橫向半寬（含耳朵）
-  const dH = (modelH*baseScale/2 * 1.10) / tan;
-  const dW = (halfW * baseScale * 1.10) / (tan * camera.aspect);
+  const dH = (modelH*baseScale/2 * 1.04) / tan;
+  const dW = (halfW * baseScale * 1.05) / (tan * camera.aspect);
   camera.position.z = Math.max(dH, dW);
   camera.lookAt(0, 0, 0);
 }
