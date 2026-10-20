@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v17 · 點一下跳 · 兩下揮手 · 三下頭髮晃</div>
+<div id="hint">v18 · 點一下跳 · 兩下揮手 · 三下頭髮左右晃</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -34,6 +34,7 @@ const FORCE_BLINK = Q.has('blink');
 const SHOW_BLUSH = Q.has('blush');
 const WAVEAT = Q.has('waveat') ? parseFloat(Q.get('waveat')) : null;
 const TFORCE = Q.has('ft') ? parseFloat(Q.get('ft')) : null;
+const SWINGAT = Q.has('swingat') ? parseFloat(Q.get('swingat')) : null;
 const WAMP = Q.has('wamp') ? parseFloat(Q.get('wamp')) : 0.95;
 if (Q.has('key')) document.body.style.background = '#00ff00';
 
@@ -449,35 +450,31 @@ function tick(){
       const FT2 = 4.6, BODY_A = 0.030;
       const ph0 = t * Math.PI * 2 / FT2;
       if (window.__body) {
-        let dip = 0;
-        if (hairSwingT >= 0 && hairSwingT < 0.95) {
-          const p = hairSwingT / 0.95;
-          dip = -0.012 * Math.sin(p * Math.PI * 3.2) * Math.pow(1 - p, 2);
-        }
-        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0) + dip;
+        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
       }
       // 點三下的頭髮大晃動（0.95 秒，帶彈性，兩邊錯開）
-      let bob0 = 0, bob1 = 0;
+      let sw0 = 0, sw1 = 0;
+      if (SWINGAT !== null) { hairSwingT = SWINGAT; }
       if (hairSwingT >= 0) {
         hairSwingT += dt;
-        const DUR = 0.95, p = hairSwingT / DUR;
+        const DUR = 1.05, p = hairSwingT / DUR;
         if (p >= 1) { hairSwingT = -1; }
         else {
           const e = Math.pow(1 - p, 2);
-          bob0 = 0.075 * Math.sin(p * Math.PI * 3.2) * e;
-          bob1 = 0.075 * Math.sin((p - 0.06) * Math.PI * 3.2) * e;
+          sw0 = 0.135 * Math.sin(p * Math.PI * 2.6) * e;         // 左右晃（繞根部）
+          sw1 = 0.135 * Math.sin((p - 0.07) * Math.PI * 2.6) * e; // 另一邊慢 0.07 秒
         }
       }
       parts.hair.forEach((h, i) => {
         const g = h.userData.pivot;
         if (!g) return;
-        const extra = hairSwingT >= 0 ? (i ? bob1 : bob0) : 0;
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.006 * Math.sin(ph0) + extra;
+        // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
+        g.rotation.z = (0.012 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
       });
       parts.hands.forEach(h => {
         const g = h.userData.pivot;
         if (!g) return;
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.008 * Math.sin(ph0);
+        g.rotation.z = 0.035 * Math.sin(ph0) * g.userData.innerSign;   // 輕微擺動，不位移
       });
     }
 
