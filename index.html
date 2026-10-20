@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v10 · 手會輕飄 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v11 · 身體漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -86,9 +86,10 @@ function blushTexture(){
   c.width = w; c.height = h;
   const g = c.getContext('2d');
   const gr = g.createRadialGradient(w/2, h/2, 0, w/2, h/2, w/2);
-  gr.addColorStop(0.00, 'rgba(255,255,255,0.95)');
-  gr.addColorStop(0.32, 'rgba(255,255,255,0.80)');
-  gr.addColorStop(0.62, 'rgba(255,255,255,0.35)');
+  gr.addColorStop(0.00, 'rgba(255,255,255,1)');
+  gr.addColorStop(0.30, 'rgba(255,255,255,0.88)');
+  gr.addColorStop(0.55, 'rgba(255,255,255,0.45)');
+  gr.addColorStop(0.78, 'rgba(255,255,255,0.12)');
   gr.addColorStop(1.00, 'rgba(255,255,255,0)');
   g.fillStyle = gr; g.fillRect(0, 0, w, h);
   const tex = new THREE.CanvasTexture(c);
@@ -249,7 +250,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     } else if (Math.abs(c0.x) < 0.06 && sz.x > 0.35 && sz.x < 0.58 && sz.y < 0.36) {
       parts.skirt = addPivot(o, c0.x, c0.y + sz.y*0.48, 1);
     }
-    if (sz.x > 0.90 && Math.abs(c0.x) < 0.10) { parts.head = o; parts.headCenter = c0.clone(); }
+    if (sz.x > 0.90 && Math.abs(c0.x) < 0.10) { parts.head = o; parts.headCenter = c0.clone(); parts.headRadius = sz.x * 0.5; parts.headDepth = sz.z * 0.5; }
   });
 
   /* 腮紅：貼在臉頰，朝外 */
@@ -258,13 +259,15 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     [[-1], [1]].forEach(([sx]) => {
       // 橫向霧狀腮紅帶
       const m = new THREE.Mesh(
-        new THREE.PlaneGeometry(0.36, 0.36),
+        new THREE.CircleGeometry(0.150, 28),
         new THREE.MeshBasicMaterial({
           map: tex, color: 0xff8ac4, transparent: true, depthWrite: false,
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
         })
       );
-      m.position.set(hc.x + sx * 0.235, hc.y - 0.115, hc.z + 0.395);
+      const rxz = Math.max(0, (parts.headRadius||0.47) ** 2 - (sx * 0.235) ** 2);
+      const zSurf = hc.z + Math.sqrt(rxz) * 0.92;   // 臉頰表面
+      m.position.set(hc.x + sx * 0.235, hc.y - 0.115, zSurf + 0.030);
       m.rotation.y = sx * 0.28;
       body.add(m);
       blush.push(m);
@@ -406,15 +409,22 @@ function tick(){
     hop.scale.set(baseScale, baseScale, baseScale);
 
 
-    // 待機：只有手輕輕漂浮（頭、頭髮、裙子都不動）
+    // 待機：整隻身體上下漂浮，頭髮與手再多一點點（有時間差）
     if (!FREEZE) {
-      const HT = 2.8, HA = 0.012;
+      const FT2 = 3.0, BODY_A = 0.055;
+      if (window.__body) {
+        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(t * Math.PI * 2 / FT2);
+      }
+      const ph0 = t * Math.PI * 2 / FT2;
+      parts.hair.forEach((h, i) => {
+        const g = h.userData.pivot;
+        if (!g) return;
+        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.016 * Math.sin(ph0 - 0.55 + i * 0.2);
+      });
       parts.hands.forEach((h, i) => {
         const g = h.userData.pivot;
         if (!g) return;
-        const ph = t * Math.PI * 2 / HT + (i ? 1.6 : 0);
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + HA * Math.sin(ph);
-        g.rotation.z = 0.05 * Math.sin(ph + 0.7) * g.userData.innerSign;
+        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.012 * Math.sin(ph0 - 0.35 + (i ? 1.2 : 0));
       });
     }
 
@@ -429,14 +439,15 @@ function tick(){
       if (g) {
         const sx = g.userData.innerSign;           // 往身體外側
         const swing = Math.sin(waveT * 13) * 0.020;
-        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.040 * env2);
-        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.100 * env2 + swing * env2;
+        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.050 * env2);
+        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.080 * env2 + swing * env2;
+        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.200 * env2;
         g.rotation.z = (-0.55 + Math.sin(waveT * 13) * 0.16) * env2 * -sx;
       }
       hop.rotation.z = 0.020 * env2;
       if (waveT > DUR) {
         waveT = -1;
-        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.rotation.z = 0; }
+        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.position.z = g.userData.baseZ; g.rotation.z = 0; }
         hop.rotation.z = 0;
         window.__waveZoom = 0; fitCamera();
       }
