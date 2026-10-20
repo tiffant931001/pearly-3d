@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v6 · 拖曳旋轉 · 點一下</div>
+<div id="hint">v7 · 拖曳旋轉 · 點一下 · 點兩下揮手</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -31,6 +31,7 @@ const FREEZE = Q.has('still'), LIT = Q.has('lit');
 const EXPR = Q.get('expr');            // smile | neutral | sad（測試用）
 const FORCE_BLINK = Q.has('blink');
 const SHOW_BLUSH = Q.has('blush');
+const WAVEAT = Q.has('waveat') ? parseFloat(Q.get('waveat')) : null;
 if (Q.has('key')) document.body.style.background = '#00ff00';
 
 /* ── 場景 ───────────────────────────────── */
@@ -190,21 +191,48 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       for (let i=0;i<cAttr.count;i++){ r+=cAttr.getX(i); g+=cAttr.getY(i); b+=cAttr.getZ(i); }
       const n = cAttr.count; mc.setRGB(r/n, g/n, b/n);
     }
-    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 140;
     const g2 = cv.getContext('2d');
-    g2.fillStyle = '#fff';
-    g2.beginPath(); g2.roundRect(8, 22, 240, 20, 10); g2.fill();
+    g2.strokeStyle = '#fff'; g2.lineWidth = 76; g2.lineCap = 'round';
+    g2.beginPath();
+    g2.moveTo(18, 54);
+    g2.quadraticCurveTo(128, 96, 238, 54);   // 中間低、兩端微上揚
+    g2.stroke();
     const ltex = new THREE.CanvasTexture(cv); ltex.colorSpace = THREE.SRGBColorSpace;
     const line = new THREE.Mesh(
-      new THREE.PlaneGeometry(0.085, 0.021),
+      new THREE.PlaneGeometry(0.100, 0.055),
       new THREE.MeshBasicMaterial({ map: ltex, color: mc, transparent: true, depthWrite: false, toneMapped: false })
     );
     const p0 = parts.mouth.position;
-    line.position.set(p0.x, p0.y - 0.004, p0.z + 0.004);
+    line.position.set(p0.x, p0.y - 0.002, p0.z + 0.004);
     line.visible = false;
     parts.mouth.parent.add(line);
     parts.mouthLine = line;
   }
+
+  /* 旋轉樞紐：手臂繞肩、耳朵繞根部 */
+  function addPivot(mesh, px, py, innerSign){
+    const g = new THREE.Group();
+    g.position.set(px, py, mesh.position.z);
+    const off = new THREE.Vector3(mesh.position.x - px, mesh.position.y - py, 0);
+    mesh.position.copy(off);
+    mesh.parent.remove(mesh);
+    g.add(mesh); body.add(g);
+    g.userData.innerSign = innerSign;
+    return g;
+  }
+  parts.arms.forEach(a => {
+    const c0 = a.userData.center, sz = a.userData.size;
+    const inner = c0.x < 0 ? 1 : -1;
+    const g = addPivot(a, c0.x + inner*sz.x*0.12, c0.y + sz.y*0.42, inner);
+    if (c0.x < 0) parts.armWave = g;    // 畫面左邊那隻手
+    else parts.armOther = g;
+  });
+  parts.ears.forEach(e => {
+    const c0 = e.userData.center, sz = e.userData.size;
+    const inner = c0.x < 0 ? 1 : -1;
+    e.userData.pivot = addPivot(e, c0.x + inner*sz.x*0.22, c0.y - sz.y*0.34, inner);
+  });
 
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
@@ -235,6 +263,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   lastTap = performance.now();
   window.__ready = true;
   if (Q.has('auto')) { setTimeout(() => tap(), 550); }
+  if (Q.has('wave')) { setTimeout(() => { waveT = 0; }, 400); }
   if (Q.has('taps')) {
     const n = parseInt(Q.get('taps')) || 3;
     for (let i = 0; i < n; i++) setTimeout(() => tap(), 500 + i * 220);
@@ -286,6 +315,8 @@ el.addEventListener('pointerup', e => {
 });
 
 let tapCount = 0, lastTap = -1e9;
+let waveT = -1, doubleAt = -1e9;
+let earTwitch = [-1, -1], nextTwitch = [5, 7];
 function tap(){
   // 1) 跳一下：只有站在地面時才給向上的速度（避免連點越跳越高）
   if (jumpY <= 0.001) {
@@ -295,7 +326,13 @@ function tap(){
   // 2) 腮紅閃一下
   blushAmt = Math.max(blushAmt, 0.9);
   lastTap = performance.now();
-  // 3) 換表情
+  // 3) 點兩下 → 揮手
+  const now = performance.now();
+  if (now - doubleAt < 340) { waveT = 0; doubleAt = -1e9; lastTap = now; return; }
+  doubleAt = now;
+  lastTap = now;
+
+  // 4) 換表情
   tapCount++;
   if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
   applyExpression();
@@ -344,8 +381,39 @@ function tick(){
     spin.rotation.y = yaw;
     tiltOuter.rotation.x = pitch;
 
-    // 靜止時不動：只有按下才會跳（呼吸起伏已經取消）
+    // 靜止基準
     hop.scale.set(baseScale, baseScale, baseScale);
+
+    // 極輕微浮動（待機 C）
+    if (!FREEZE) hop.position.y += Math.sin(t * 1.6) * 0.0016 - hop.position.y * 0.08;
+
+    // 揮手（點兩下觸發）
+    if (waveT >= 0 || WAVEAT !== null) {
+      waveT = (WAVEAT !== null) ? WAVEAT : waveT + dt;
+      const DUR = 1.7;
+      const p = waveT / DUR;
+      const env = p < 0.18 ? p / 0.18 : (p > 0.82 ? (1 - p) / 0.18 : 1);
+      const ang = (-0.38 + Math.sin(waveT * 17) * 0.12) * env;
+      if (parts.armWave) parts.armWave.rotation.z = ang;
+      if (waveT > DUR) { waveT = -1; if (parts.armWave) parts.armWave.rotation.z = 0; }
+    }
+
+    // 耳朵偶爾抖一下（待機 C）
+    if (!FREEZE) {
+      parts.ears.forEach((e, i) => {
+        const g = e.userData.pivot;
+        if (!g) return;
+        if (earTwitch[i] < 0) {
+          nextTwitch[i] -= dt;
+          if (nextTwitch[i] <= 0) { earTwitch[i] = 0; nextTwitch[i] = 6 + Math.random() * 4; }
+        } else {
+          earTwitch[i] += dt;
+          const k = earTwitch[i] / 0.42;
+          g.rotation.z = Math.sin(earTwitch[i] * 30) * 0.07 * (1 - k) * g.userData.innerSign;
+          if (k >= 1) { earTwitch[i] = -1; g.rotation.z = 0; }
+        }
+      });
+    }
 
     // 跳躍（重力）
     if (!FREEZE || jumpY !== 0) {
@@ -360,7 +428,7 @@ function tick(){
     if (Math.abs(squash) < 0.004) squash = 0;
     hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
     hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
-    if (Q.has('dbg')) document.title = `sq=${squash.toFixed(3)} sx=${hop.scale.x.toFixed(3)} sy=${hop.scale.y.toFixed(3)}`;
+    if (Q.has('dbg')) document.title = `arms=${parts.arms.length} ears=${parts.ears.length} wave=${waveT.toFixed(2)} rot=${(parts.armWave?parts.armWave.rotation.z:0).toFixed(3)}`;
 
     // 眨眼
     if (FREEZE) {
