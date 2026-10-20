@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v5 · 拖曳旋轉 · 點一下</div>
+<div id="hint">v6 · 拖曳旋轉 · 點一下</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -46,11 +46,11 @@ const FOV = Q.has('fov') ? parseFloat(Q.get('fov')) : 30;
 const camera = new THREE.PerspectiveCamera(FOV, innerWidth/innerHeight, 0.1, 60);
 
 // 光只加很淡的一層：主要明暗其實畫在頂點色裡（跟原圖一致）
-scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.92));
-const key = new THREE.DirectionalLight(0xffffff, Q.has('keyi') ? parseFloat(Q.get('keyi')) : 0.16); key.position.set(0.8, 2.2, 3.2);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.80));
+const key = new THREE.DirectionalLight(0xffffff, Q.has('keyi') ? parseFloat(Q.get('keyi')) : 0.42); key.position.set(0.8, 2.2, 3.2);
 const fill = new THREE.DirectionalLight(0xffeef8, 0.22); fill.position.set(-3, 0.6, 1.6);
 // 左右側光：把耳朵/手臂外側提亮（原畫的柔和均勻感）
-const SID = Q.has('sid') ? parseFloat(Q.get('sid')) : 0.62;
+const SID = Q.has('sid') ? parseFloat(Q.get('sid')) : 1.00;
 const sidL = new THREE.DirectionalLight(0xffffff, SID); sidL.position.set(-3.2, 0.4, 0.6);
 const sidR = new THREE.DirectionalLight(0xffffff, SID); sidR.position.set( 3.2, 0.4, 0.6);
 scene.add(key, fill, sidL, sidR);
@@ -139,7 +139,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       ca.needsUpdate = true;
     }
 
-    const DES = Q.has('des') ? parseFloat(Q.get('des')) : 0.20;
+    const DES = Q.has('des') ? parseFloat(Q.get('des')) : 0.26;
     if (ca && DES > 0) {
       for (let i = 0; i < ca.count; i++) {
         const r = ca.getX(i), g = ca.getY(i), b = ca.getZ(i);
@@ -167,7 +167,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     else if (size.y < 0.12 && size.x < 0.15 && c.z > 0.35) parts.mouth = mesh;
     else if (ax > 0.45 && size.y > 0.90) { mesh.material.color.setScalar(1.34); parts.arms.push(mesh); }
     else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) { mesh.material.color.setScalar(1.12); parts.ears.push(mesh); }
-    else if (size.x > 0.9) parts.head = mesh;
+    else if (size.x > 0.9) { mesh.material.color.setScalar(0.97); parts.head = mesh; }
   });
 
   // 置中 + 縮放（高度 = 2）
@@ -180,6 +180,31 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   modelH = size.y; modelW = size.x;
   hop.scale.setScalar(baseScale);
   hop.add(body);
+
+  /* 普通表情用的短橫線嘴巴（顏色沿用嘴巴本身的粉紅） */
+  if (parts.mouth) {
+    const mc = new THREE.Color(1,1,1);
+    const cAttr = parts.mouth.geometry.attributes.color;
+    if (cAttr) {
+      let r=0,g=0,b=0;
+      for (let i=0;i<cAttr.count;i++){ r+=cAttr.getX(i); g+=cAttr.getY(i); b+=cAttr.getZ(i); }
+      const n = cAttr.count; mc.setRGB(r/n, g/n, b/n);
+    }
+    const cv = document.createElement('canvas'); cv.width = 256; cv.height = 64;
+    const g2 = cv.getContext('2d');
+    g2.fillStyle = '#fff';
+    g2.beginPath(); g2.roundRect(8, 22, 240, 20, 10); g2.fill();
+    const ltex = new THREE.CanvasTexture(cv); ltex.colorSpace = THREE.SRGBColorSpace;
+    const line = new THREE.Mesh(
+      new THREE.PlaneGeometry(0.085, 0.021),
+      new THREE.MeshBasicMaterial({ map: ltex, color: mc, transparent: true, depthWrite: false, toneMapped: false })
+    );
+    const p0 = parts.mouth.position;
+    line.position.set(p0.x, p0.y - 0.004, p0.z + 0.004);
+    line.visible = false;
+    parts.mouth.parent.add(line);
+    parts.mouthLine = line;
+  }
 
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
@@ -207,6 +232,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
   if (Q.has('expr'))  { expr = Q.get('expr'); applyExpression(true); }
   loaded = true;
+  lastTap = performance.now();
   window.__ready = true;
   if (Q.has('auto')) { setTimeout(() => tap(), 550); }
   if (Q.has('taps')) {
@@ -221,9 +247,16 @@ function setEyeOpen(v){ parts.eyes.forEach(e => { e.scale.y = v; }); }
 function applyExpression(instant){
   const m = parts.mouth;
   if (!m) return;
-  if (expr === 'smile')      { m.rotation.z = 0;        m.scale.set(1, 1, 1); }
-  if (expr === 'neutral')    { m.rotation.z = 0;        m.scale.set(1, 0.18, 1); }
-  if (expr === 'sad')        { m.rotation.z = Math.PI;  m.scale.set(1, 1, 1); }
+  const line = parts.mouthLine;
+  m.rotation.z = 0; m.scale.set(1, 1, 1);
+  if (line) line.visible = false;
+  if (expr === 'smile')      { m.visible = true;  m.rotation.z = 0;       }
+  if (expr === 'sad')        { m.visible = true;  m.rotation.z = Math.PI; }
+  if (expr === 'neutral')    {
+    m.visible = false;
+    if (line) line.visible = true;
+    else { m.visible = true; m.scale.set(1, 0.22, 1); }   // 沒有線模型時退回舊做法
+  }
   blushTarget = 0;   // 靜止時不上腮紅，點了才冒
 }
 
@@ -254,9 +287,11 @@ el.addEventListener('pointerup', e => {
 
 let tapCount = 0, lastTap = -1e9;
 function tap(){
-  // 1) 跳一下：先壓再彈起
-  squash = -0.30;         // 只壓一下，0.2 秒內回正
-  jumpV = 3.1;
+  // 1) 跳一下：只有站在地面時才給向上的速度（避免連點越跳越高）
+  if (jumpY <= 0.001) {
+    squash = -0.30;       // 只壓一下，0.2 秒內回正
+    jumpV = 3.1;
+  }
   // 2) 腮紅閃一下
   blushAmt = Math.max(blushAmt, 0.9);
   lastTap = performance.now();
@@ -343,7 +378,7 @@ function tick(){
     }
 
     // 4 秒沒互動 → 表情自動回到笑臉
-    if (expr !== 'smile' && performance.now() - lastTap > 4000) { expr = 'smile'; applyExpression(); }
+    if (!FREEZE && expr !== 'smile' && performance.now() - lastTap > 4000) { expr = 'smile'; applyExpression(); }
 
     // 腮紅：點擊閃一下，再慢慢退
     if (SHOW_BLUSH) blushAmt = 0.85;
