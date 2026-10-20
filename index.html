@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>角色</title>
 <style>
-  html,body{margin:0;height:100%;overflow:hidden;
+  html,body{margin:0;height:100%;height:100dvh;overflow:hidden;
     background:linear-gradient(180deg,#d4f4ff 0%,#dfe3ff 34%,#e6d2ff 66%,#eda8fe 100%);}
   canvas{display:block;touch-action:none;-webkit-tap-highlight-color:transparent}
   #hint{position:fixed;left:0;right:0;bottom:16px;text-align:center;
@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v13 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v14 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -48,6 +48,7 @@ document.body.appendChild(renderer.domElement);
 const scene = new THREE.Scene();
 const FOV = Q.has('fov') ? parseFloat(Q.get('fov')) : 30;
 const camera = new THREE.PerspectiveCamera(FOV, innerWidth/innerHeight, 0.1, 60);
+window.__cam = camera;
 
 // 光只加很淡的一層：主要明暗其實畫在頂點色裡（跟原圖一致）
 scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.80));
@@ -187,6 +188,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   hop.scale.setScalar(baseScale);
   hop.add(body);
   window.__body = body;
+  window.__hop = hop;
 
   /* 普通表情用的短橫線嘴巴（顏色沿用嘴巴本身的粉紅） */
   if (parts.mouth) {
@@ -372,11 +374,16 @@ function tap(){
   applyExpression();
 }
 
+let _rzTimer = null;
 addEventListener('resize', () => {
-  camera.aspect = innerWidth/innerHeight;
-  camera.updateProjectionMatrix();
-  renderer.setSize(innerWidth, innerHeight);
-  if (loaded) fitCamera();
+  clearTimeout(_rzTimer);
+  _rzTimer = setTimeout(() => {
+    const w = innerWidth, h = innerHeight;
+    camera.aspect = w / h;
+    camera.updateProjectionMatrix();
+    renderer.setSize(w, h);
+    if (loaded) fitCamera();
+  }, 120);
 });
 
 function fitCamera(){
@@ -408,8 +415,10 @@ function tick(){
       }
     }
     const ar = renderer.domElement.clientWidth / renderer.domElement.clientHeight;
-    if (Math.abs(ar - camera.aspect) > 1e-3) {
-      camera.aspect = ar; camera.updateProjectionMatrix(); fitCamera();
+    if (Math.abs(ar - camera.aspect) > 0.02) {     // 只有明顯變化才重算，避免每幀抖動
+      camera.aspect = ar; camera.updateProjectionMatrix();
+      renderer.setSize(renderer.domElement.clientWidth, renderer.domElement.clientHeight);
+      fitCamera();
     }
     pitch = THREE.MathUtils.clamp(pitch, -0.55, 0.55);
     spin.rotation.y = yaw;
@@ -471,12 +480,12 @@ function tick(){
     }
 
 
-    // 跳躍（重力）
-    if (!FREEZE || jumpY !== 0) {
+    // 跳躍（重力）：只有真的在跳的時候才算，靜止時完全不跑
+    if (!FREEZE && (jumpY > 0 || jumpV !== 0)) {
       jumpV -= 10.0 * dt;
       jumpY += jumpV * dt;
-      if (jumpY < 0) { jumpY = 0; jumpV = 0; squash = 0.22; }   // 落地壓一下
-      hop.position.y = jumpY;
+      if (jumpY <= 0) { jumpY = 0; jumpV = 0; hop.position.y = 0; squash = 0.22; }   // 落地壓一下
+      else hop.position.y = jumpY;
     }
 
     // 擠壓：改成「固定時間衰減」，不會累積、也不會卡住
@@ -484,6 +493,15 @@ function tick(){
     if (Math.abs(squash) < 0.004) squash = 0;
     hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
     hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
+    if (Q.has('jit')) {
+      const by = (window.__body ? window.__body.position.y : 0);
+      window.__jb = window.__jb || {prev: by, max: 0, sum: 0, n: 0, prevT: t};
+      const d = Math.abs(by - window.__jb.prev);
+      window.__jb.max = Math.max(window.__jb.max, d);
+      window.__jb.sum += d; window.__jb.n++;
+      window.__jb.prev = by;
+      document.title = `jit max=${window.__jb.max.toFixed(4)} avg=${(window.__jb.sum/window.__jb.n).toFixed(5)} dt=${dt.toFixed(3)} n=${window.__jb.n}`;
+    }
     if (Q.has('dbg')) document.title = `hw=${parts.handWave?parts.handWave.rotation.z.toFixed(2):'none'} hy=${parts.handWave?parts.handWave.position.y.toFixed(2):'-'} wt=${waveT.toFixed(2)} wa=${WAVEAT} mr=${parts.mouth.rotation.z.toFixed(3)} ms=${parts.mouth.scale.x.toFixed(2)},${parts.mouth.scale.y.toFixed(2)} mp=${parts.mouth.position.x.toFixed(3)},${parts.mouth.position.y.toFixed(3)},${parts.mouth.position.z.toFixed(3)}`;
 
     // 眨眼
