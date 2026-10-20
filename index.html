@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v4 · 拖曳旋轉 · 點一下</div>
+<div id="hint">v5 · 拖曳旋轉 · 點一下</div>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
@@ -42,14 +42,15 @@ renderer.toneMapping = THREE.NoToneMapping;
 document.body.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
-const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 60);
+const FOV = Q.has('fov') ? parseFloat(Q.get('fov')) : 30;
+const camera = new THREE.PerspectiveCamera(FOV, innerWidth/innerHeight, 0.1, 60);
 
 // 光只加很淡的一層：主要明暗其實畫在頂點色裡（跟原圖一致）
-scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.55));
-const key = new THREE.DirectionalLight(0xffffff, Q.has('keyi') ? parseFloat(Q.get('keyi')) : 0.32); key.position.set(0.8, 2.2, 3.2);
+scene.add(new THREE.HemisphereLight(0xffffff, 0xffffff, Q.has('hemi') ? parseFloat(Q.get('hemi')) : 1.92));
+const key = new THREE.DirectionalLight(0xffffff, Q.has('keyi') ? parseFloat(Q.get('keyi')) : 0.16); key.position.set(0.8, 2.2, 3.2);
 const fill = new THREE.DirectionalLight(0xffeef8, 0.22); fill.position.set(-3, 0.6, 1.6);
 // 左右側光：把耳朵/手臂外側提亮（原畫的柔和均勻感）
-const SID = Q.has('sid') ? parseFloat(Q.get('sid')) : 1.00;
+const SID = Q.has('sid') ? parseFloat(Q.get('sid')) : 0.62;
 const sidL = new THREE.DirectionalLight(0xffffff, SID); sidL.position.set(-3.2, 0.4, 0.6);
 const sidR = new THREE.DirectionalLight(0xffffff, SID); sidR.position.set( 3.2, 0.4, 0.6);
 scene.add(key, fill, sidL, sidR);
@@ -138,6 +139,16 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       ca.needsUpdate = true;
     }
 
+    const DES = Q.has('des') ? parseFloat(Q.get('des')) : 0.20;
+    if (ca && DES > 0) {
+      for (let i = 0; i < ca.count; i++) {
+        const r = ca.getX(i), g = ca.getY(i), b = ca.getZ(i);
+        const l = 0.299*r + 0.587*g + 0.114*b;
+        ca.setXYZ(i, r + (l-r)*DES, g + (l-g)*DES, b + (l-b)*DES);
+      }
+      ca.needsUpdate = true;
+    }
+
     const mat = Q.has('basic')
       ? new THREE.MeshBasicMaterial({ vertexColors: true })
       : new THREE.MeshStandardMaterial({
@@ -154,8 +165,8 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     const ax = Math.abs(c.x);
     if (size.z < 0.12 && size.x < 0.25 && size.y > 0.15 && c.z > 0.35) parts.eyes.push(mesh);
     else if (size.y < 0.12 && size.x < 0.15 && c.z > 0.35) parts.mouth = mesh;
-    else if (ax > 0.45 && size.y > 0.90) { mesh.material.color.setScalar(1.30); parts.arms.push(mesh); }
-    else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) parts.ears.push(mesh);
+    else if (ax > 0.45 && size.y > 0.90) { mesh.material.color.setScalar(1.34); parts.arms.push(mesh); }
+    else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) { mesh.material.color.setScalar(1.12); parts.ears.push(mesh); }
     else if (size.x > 0.9) parts.head = mesh;
   });
 
@@ -244,7 +255,7 @@ el.addEventListener('pointerup', e => {
 let tapCount = 0, lastTap = -1e9;
 function tap(){
   // 1) 跳一下：先壓再彈起
-  squashV -= 3.0;
+  squash = -0.30;         // 只壓一下，0.2 秒內回正
   jumpV = 3.1;
   // 2) 腮紅閃一下
   blushAmt = Math.max(blushAmt, 0.9);
@@ -305,18 +316,15 @@ function tick(){
     if (!FREEZE || jumpY !== 0) {
       jumpV -= 10.0 * dt;
       jumpY += jumpV * dt;
-      if (jumpY < 0) { jumpY = 0; jumpV = 0; squashV += 1.8; }   // 落地壓一下
+      if (jumpY < 0) { jumpY = 0; jumpV = 0; squash = 0.22; }   // 落地壓一下
       hop.position.y = jumpY;
     }
 
-    // 落地擠壓彈簧（有硬上限，避免連續點擊累積能量把角色壓扁）
-    squashV += (-70 * squash - 9.0 * squashV) * dt;
-    squash += squashV * dt;
-    if (!Number.isFinite(squash)) { squash = 0; squashV = 0; }
-    squash = THREE.MathUtils.clamp(squash, -0.55, 0.55);   // 最多 ±12% 變形
-    if (Math.abs(squash) < 0.0015) { squash = 0; squashV *= 0.5; }
-    hop.scale.x *= 1 - squash * 0.22;
-    hop.scale.y *= 1 + squash * 0.16;
+    // 擠壓：改成「固定時間衰減」，不會累積、也不會卡住
+    squash *= Math.exp(-13.0 * dt);
+    if (Math.abs(squash) < 0.004) squash = 0;
+    hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
+    hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
     if (Q.has('dbg')) document.title = `sq=${squash.toFixed(3)} sx=${hop.scale.x.toFixed(3)} sy=${hop.scale.y.toFixed(3)}`;
 
     // 眨眼
