@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="zh-Hant">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>角色動態測試</title>
+<style>
+  html,body{margin:0;height:100%;overflow:hidden;
+    background:linear-gradient(180deg,#d5f3ff 0%,#dfe4ff 30%,#e2cfff 62%,#eda7ff 100%);}
+  canvas{display:block;touch-action:none;-webkit-tap-highlight-color:transparent}
+  #hint{position:fixed;left:0;right:0;bottom:16px;text-align:center;
+    font:13px/1.4 -apple-system,"PingFang TC","Noto Sans TC",sans-serif;
+    color:#8a6a9e;opacity:.5;pointer-events:none;user-select:none}
+</style>
+<script type="importmap">
+{"imports":{
+  "three":"https://unpkg.com/three@0.186.0/build/three.module.js",
+  "three/addons/":"https://unpkg.com/three@0.186.0/examples/jsm/"
+}}
+</script>
+</head>
+<body>
+<div id="hint">點它一下</div>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const Q = new URLSearchParams(location.search);
+const FREEZE = Q.has('still');
+const FORCE_BLINK = Q.has('blink');
+
+// ── 渲染器 ──
+const renderer = new THREE.WebGLRenderer({antialias:true, alpha:true});
+renderer.setPixelRatio(Math.min(devicePixelRatio, 2));
+renderer.setSize(innerWidth, innerHeight);
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.toneMapping = THREE.NoToneMapping;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(30, innerWidth/innerHeight, 0.1, 60);
+
+// ── 柔光：上方白、下方淡紫，正面主光，霧面無反光（照截圖的高調粉彩）──
+scene.add(new THREE.HemisphereLight(0xffffff, 0xecdfff, 1.85));
+const key  = new THREE.DirectionalLight(0xffffff, 1.45); key.position.set(0.5, 2.0, 4.0);
+const fill = new THREE.DirectionalLight(0xf4e9ff, 0.55); fill.position.set(-3.0, 0.4, 2.2);
+const rim  = new THREE.DirectionalLight(0xffffff, 0.30); rim.position.set(0.0, 1.0, -3.0);
+scene.add(key, fill, rim);
+
+const holder = new THREE.Group();      // 整體漂浮 / 呼吸 / 擠壓
+scene.add(holder);
+
+let loaded = false, baseScale = 1;
+const ears = [], eyes = [];
+const float0 = new THREE.Vector3();
+const clock = new THREE.Clock();
+let t = 0, blinkT = -1, nextBlink = 2.4, squash = 0, squashV = 0;
+const pointer = {x:0, y:0}, pointerS = {x:0, y:0};
+const easeInOut = x => x < 0.5 ? 2*x*x : 1 - Math.pow(-2*x+2, 2)/2;
+
+new GLTFLoader().load('./character.glb', (gltf) => {
+  // 1) 把每個零件的世界座標「烤」進幾何，並把原點移到各自的包圍盒中心
+  //    這樣 scale / rotation 都繞自己的中心，不會被節點旋轉與鏡射搞亂。
+  const src = gltf.scene;
+  src.updateMatrixWorld(true);
+  const parts = [];
+  src.traverse(o => { if (o.isMesh) parts.push(o); });
+
+  const body = new THREE.Group();
+  const seenGeo = new Set();
+  parts.forEach(o => {
+    const geo = o.geometry.clone();                 // clone 避免共用幾何被重複轉換
+    geo.applyMatrix4(o.matrixWorld);
+    geo.computeBoundingBox();
+    const c = geo.boundingBox.getCenter(new THREE.Vector3());
+    const size = geo.boundingBox.getSize(new THREE.Vector3());
+    geo.translate(-c.x, -c.y, -c.z);                // 幾何中心歸零
+    geo.computeVertexNormals();
+
+    const m = o.material.clone();
+    m.vertexColors = true;
+    m.flatShading = true;                           // 低多邊形切面感
+    m.roughness = 1.0; m.metalness = 0.0;
+    m.side = THREE.FrontSide;
+    m.needsUpdate = true;
+
+    const mesh = new THREE.Mesh(geo, m);
+    mesh.position.copy(c);                          // 用位置把它放回原位
+    mesh.userData.size = size.clone();
+    mesh.userData.center = c.clone();
+    body.add(mesh);
+
+    // 依世界座標判斷是哪個零件
+    const ax = Math.abs(c.x);
+    if (size.z < 0.12 && size.x < 0.25 && size.y > 0.15 && c.z > 0.35) {          // 眼睛：臉前方薄片（排除嘴巴）
+      eyes.push(mesh);
+    } else if (ax > 0.45 && size.y > 0.55 && size.y < 0.85) {    // 耳朵：兩側、高度中等
+      ears.push(mesh);
+    }
+  });
+
+  // 2) 置中 + 統一縮放（高度 = 2）
+  body.updateMatrixWorld(true);
+  const box = new THREE.Box3().setFromObject(body);
+  const size = box.getSize(new THREE.Vector3());
+  const center = box.getCenter(new THREE.Vector3());
+  body.position.sub(center);
+  float0.copy(body.position);
+  baseScale = 2.0 / size.y;
+  holder.scale.setScalar(baseScale);
+  holder.add(body);
+
+  // 量測「縮放後」的真實尺寸，鏡頭才知道要退多遠
+  const fits = new THREE.Box3().setFromObject(holder);
+  modelSize = fits.getSize(new THREE.Vector3());
+
+  camera.position.set(0, 0.06, 7.6);
+  fitCamera();
+  camera.lookAt(0, 0, 0);
+  loaded = true;
+  window.__ready = true;
+  window.__parts = {eyes: eyes.length, ears: ears.length, total: parts.length};
+
+  if (Q.has('debug')) {
+    const pre = document.createElement('pre');
+    pre.id = 'dbg';
+    pre.textContent = parts.map(o => {
+      const b = new THREE.Box3().setFromObject(o);
+      const c2 = b.getCenter(new THREE.Vector3()), s2 = b.getSize(new THREE.Vector3());
+      return `${o.name} c=${c2.toArray().map(v=>v.toFixed(2))} sz=${s2.toArray().map(v=>v.toFixed(2))} v=${o.geometry.attributes.position.count}`;
+    }).join('\n') + `\nEYES=${eyes.length} EARS=${ears.length}`;
+    document.body.appendChild(pre);
+  }
+}, undefined, e => { window.__err = String(e); });
+
+renderer.domElement.addEventListener('pointerdown', () => {
+  squashV += 6.0;
+  if (Math.random() < 0.55) blinkT = 0;
+});
+addEventListener('pointermove', e => {
+  pointer.x = (e.clientX/innerWidth)*2 - 1;
+  pointer.y = (e.clientY/innerHeight)*2 - 1;
+});
+addEventListener('resize', () => {
+  camera.aspect = innerWidth/innerHeight;
+  camera.updateProjectionMatrix();
+  renderer.setSize(innerWidth, innerHeight);
+  fitCamera();
+});
+
+// 依畫面比例自動決定鏡頭距離（用實際模型尺寸算，不靠猜）
+let modelSize = null;
+function fitCamera(){
+  if (!modelSize) return;
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const dH = (modelSize.y / 2 * 1.22) / t;                    // 垂直留邊
+  const dW = (modelSize.x / 2 * 1.22) / (t * camera.aspect);  // 水平留邊
+  camera.position.z = Math.max(dH, dW);
+  camera.lookAt(0, 0, 0);
+}
+
+const BREATH = 2.6, LAG = 0.15;
+const setEyeOpen = v => eyes.forEach(e => { e.scale.y = v; });
+
+function tick(){
+  const dt = Math.min(clock.getDelta(), 0.05);
+  if (!FREEZE) t += dt;
+
+  if (loaded) {
+    const ph = (t / BREATH) * Math.PI * 2;
+
+    // 漂浮
+    holder.position.y = Math.sin(ph) * 0.05;
+
+    // 呼吸：上下微微拉長、左右略收
+    const br = Math.sin(ph) * 0.014;
+    holder.scale.set(baseScale*(1 - br*0.45), baseScale*(1 + br), baseScale*(1 - br*0.45));
+
+    // 耳朵：落後 0.15 秒的同一波形（這是最關鍵的「活感」）
+    ears.forEach((e, i) => {
+      const ep = ((t - LAG) / BREATH) * Math.PI * 2;
+      const sgn = e.userData.center.x > 0 ? 1 : -1;
+      e.rotation.z = Math.sin(ep) * 0.05 * sgn;
+      e.position.y = e.userData.center.y + Math.sin(ep + Math.PI/2) * 0.02;
+    });
+
+    // 眨眼
+    if (FREEZE) {
+      if (FORCE_BLINK) setEyeOpen(0.06);
+    } else {
+      nextBlink -= dt;
+      if (nextBlink <= 0 && blinkT < 0) { blinkT = 0; nextBlink = 2.4 + Math.random()*3.0; }
+      if (blinkT >= 0) {
+        blinkT += dt;
+        const d = 0.12;
+        const k = blinkT < d/2 ? blinkT/(d/2) : Math.max(0, 1 - (blinkT - d/2)/(d/2));
+        setEyeOpen(1 - 0.94 * easeInOut(k));
+        if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
+      }
+    }
+
+    // 點擊擠壓（阻尼彈簧，自己回到原狀）
+    squashV += (-62 * squash - 8.0 * squashV) * dt;
+    squash += squashV * dt;
+    holder.scale.x *= 1 - squash * 0.30;
+    holder.scale.z *= 1 - squash * 0.30;
+    holder.scale.y *= 1 + squash * 0.20;
+
+    // 指標視差
+    pointerS.x += (pointer.x * 0.09 - pointerS.x) * Math.min(1, dt*4);
+    pointerS.y += (pointer.y * 0.06 - pointerS.y) * Math.min(1, dt*4);
+    holder.rotation.y = pointerS.x;
+    holder.rotation.x = pointerS.y * 0.7;
+    camera.position.x = pointerS.x * 0.30;
+    camera.lookAt(0, holder.position.y * 0.5, 0);
+  }
+
+  renderer.render(scene, camera);
+}
+renderer.setAnimationLoop(tick);
+</script>
+</body>
+</html>
