@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v15 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v16 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -454,6 +454,8 @@ function tick(){
       const p = Math.min(waveT / DUR, 1);
       const ss = x => x * x * (3 - 2 * x);
       const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
+      const WLIFT = Q.has('wlift') ? parseFloat(Q.get('wlift')) : 0.030;
+      const WROTX = Q.has('wrotx') ? parseFloat(Q.get('wrotx')) : 0.35;
       const g = parts.handWave;
       if (g) {
         if (g.userData.baseX === undefined) g.userData.baseX = g.position.x;
@@ -462,9 +464,9 @@ function tick(){
         const swing = Math.sin(waveT * 11);
         const lift  = Math.sin(waveT * 11 + 0.6);
         // 往鏡頭方向抬起（繞 X 軸）＋ 上下擺 → 有深度的手揮動
-        g.rotation.x = (-0.70 + swing * 0.22) * env2;
+        g.rotation.x = (-WROTX + swing * 0.22) * env2;
         g.rotation.z = (-0.18 + swing * 0.10) * env2 * -g.userData.innerSign;
-        g.position.y = g.userData.baseY + (0.130 + lift * 0.045) * env2;
+        g.position.y = g.userData.baseY + (WLIFT + lift * 0.045) * env2;
         g.position.z = g.userData.baseZ + (0.150 + swing * 0.030) * env2;
         g.position.x = g.userData.baseX - g.userData.innerSign * 0.020 * env2;
       }
