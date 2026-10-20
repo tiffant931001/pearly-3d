@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v12 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v13 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -264,7 +264,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     [[-1], [1]].forEach(([sx]) => {
       // 橫向霧狀腮紅帶
       const m = new THREE.Mesh(
-        new THREE.CircleGeometry(0.150, 28),
+        new THREE.CircleGeometry(0.115, 28),
         new THREE.MeshBasicMaterial({
           map: tex, color: 0xff8ac4, transparent: true, depthWrite: false,
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
@@ -273,9 +273,10 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       const eyeX = (parts.eyeCenterX || 0.19) * 1.02;
       const rxz = Math.max(0, (parts.headRadius||0.47) ** 2 - eyeX ** 2);
       const zSurf = hc.z + Math.sqrt(rxz) * 0.90;
-      m.position.set(sx * eyeX, (parts.eyeCenterY || 0) - 0.150, zSurf + 0.030);
+      m.position.set(sx * eyeX, (parts.eyeCenterY || 0) - 0.105, zSurf + 0.055);
       m.rotation.y = sx * 0.28;
       body.add(m);
+      m.renderOrder = 10;
       blush.push(m);
 
     });
@@ -451,14 +452,14 @@ function tick(){
         if (g.userData.baseY === undefined) g.userData.baseY = g.position.y;
         if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
         if (g.userData.baseY2 === undefined) g.userData.baseY2 = g.userData.baseY;
-        const swing = Math.sin(waveT * 13) * 0.020;
-        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.060 * env2);
-        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.105 * env2 + swing * env2;
-        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.140 * env2;
+        const swing = Math.sin(waveT * 13) * 0.012;
+        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.030 * env2);
+        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.055 * env2 + swing * env2;
+        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.070 * env2;
         const sc = 1 + 0.12 * env2;
         g.scale.setScalar(sc);
-        const WROT = Q.has('wrot') ? parseFloat(Q.get('wrot')) : 0.55;
-        g.rotation.z = (WROT + Math.sin(waveT * 13) * 0.18) * env2 * -g.userData.innerSign;
+        const WROT = Q.has('wrot') ? parseFloat(Q.get('wrot')) : 0.36;
+        g.rotation.z = (WROT + Math.sin(waveT * 13) * 0.10) * env2 * -g.userData.innerSign;
       }
       hop.rotation.z = 0.020 * env2;
       if (waveT > DUR) {
