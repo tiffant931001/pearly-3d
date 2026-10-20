@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v11 · 身體漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v12 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -232,6 +232,10 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     return g;
   }
   // 用「世界座標」重新認零件：頭髮＝兩大顆、手＝兩顆小錐形、裙子＝中間那片
+  if (parts.eyes.length) {
+    const e0 = new THREE.Box3().setFromObject(parts.eyes[0]).getCenter(new THREE.Vector3());
+    parts.eyeCenterX = Math.abs(e0.x); parts.eyeCenterY = e0.y;
+  }
   body.updateMatrixWorld(true);
   parts.hair = []; parts.hands = []; parts.skirt = null;
   body.children.filter(o => o.isMesh).forEach(o => {
@@ -246,7 +250,8 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       parts.hands.push(o);
       const inner = c0.x < 0 ? 1 : -1;
       const g = addPivot(o, c0.x + inner*sz.x*0.10, c0.y + sz.y*0.46, inner);
-      if (c0.x > 0) parts.handWave = g; else parts.handOther = g;
+      o.userData.pivot = g;                        // ← 少了這行，待機就抓不到基準值
+      if (c0.x < 0) parts.handWave = g; else parts.handOther = g;
     } else if (Math.abs(c0.x) < 0.06 && sz.x > 0.35 && sz.x < 0.58 && sz.y < 0.36) {
       parts.skirt = addPivot(o, c0.x, c0.y + sz.y*0.48, 1);
     }
@@ -265,9 +270,10 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
         })
       );
-      const rxz = Math.max(0, (parts.headRadius||0.47) ** 2 - (sx * 0.235) ** 2);
-      const zSurf = hc.z + Math.sqrt(rxz) * 0.92;   // 臉頰表面
-      m.position.set(hc.x + sx * 0.235, hc.y - 0.115, zSurf + 0.030);
+      const eyeX = (parts.eyeCenterX || 0.19) * 1.02;
+      const rxz = Math.max(0, (parts.headRadius||0.47) ** 2 - eyeX ** 2);
+      const zSurf = hc.z + Math.sqrt(rxz) * 0.90;
+      m.position.set(sx * eyeX, (parts.eyeCenterY || 0) - 0.150, zSurf + 0.030);
       m.rotation.y = sx * 0.28;
       body.add(m);
       blush.push(m);
@@ -279,6 +285,9 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   fitCamera();
   if (Q.has('list')) { const out=[]; body.traverse(o=>{ if(o.isMesh && o.geometry){ const bb=new THREE.Box3().setFromObject(o); const sz=new THREE.Vector3(); bb.getSize(sz); const c=new THREE.Vector3(); bb.getCenter(c); out.push([o.name, +c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2), +sz.x.toFixed(2), +sz.y.toFixed(2), +sz.z.toFixed(2), o.geometry.attributes.position.count]); } }); document.title = 'LIST'+JSON.stringify(out); }
   if (Q.has('bl')) { const info=[]; blush.forEach(b=>{ b.updateWorldMatrix(true,false); const w=new THREE.Vector3(); b.getWorldPosition(w); info.push({local:[+b.position.x.toFixed(2),+b.position.y.toFixed(2),+b.position.z.toFixed(2)], world:[+w.x.toFixed(2),+w.y.toFixed(2),+w.z.toFixed(2)], parent: b.parent.type + ':' + [b.parent.position.x.toFixed(2),b.parent.position.y.toFixed(2)].join(',')}); }); document.title='BL'+JSON.stringify(info); }
+  if (Q.has('hh')) { parts.hands.forEach(h=>h.visible=false); }
+  if (Q.has('hhi')) { parts.hands.forEach(h=>{ h.material.color.set(0xff0000); }); }
+  if (Q.has('hw')) { const g=parts.handWave; const b=parts.handWave&&parts.handWave.children[0]; const w=new THREE.Vector3(); if(g) g.getWorldPosition(w); document.title='HW'+JSON.stringify({has:!!g, gpos:g?[+g.position.x.toFixed(2),+g.position.y.toFixed(2),+g.position.z.toFixed(2)]:null, world:[+w.x.toFixed(2),+w.y.toFixed(2),+w.z.toFixed(2)], hands:parts.hands.length, vis: b?b.visible:null}); }
   if (Q.has('dbg')) { const m=parts.mouth; document.title = m ? `mr=${m.rotation.x.toFixed(2)},${m.rotation.y.toFixed(2)},${m.rotation.z.toFixed(2)} mp=${m.position.x.toFixed(3)},${m.position.y.toFixed(3)},${m.position.z.toFixed(3)} ms=${m.scale.x.toFixed(2)},${m.scale.y.toFixed(2)},${m.scale.z.toFixed(2)}` : 'no mouth'; }
   if (Q.has('yaw'))   { yaw = parseFloat(Q.get('yaw')); }
   if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
@@ -409,22 +418,22 @@ function tick(){
     hop.scale.set(baseScale, baseScale, baseScale);
 
 
-    // 待機：整隻身體上下漂浮，頭髮與手再多一點點（有時間差）
+    // 待機：整隻（頭+身體）一起慢慢上下漂浮；頭髮與手只做極小幅度的同相位浮動
     if (!FREEZE) {
-      const FT2 = 3.0, BODY_A = 0.055;
-      if (window.__body) {
-        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(t * Math.PI * 2 / FT2);
-      }
+      const FT2 = 4.6, BODY_A = 0.030;
       const ph0 = t * Math.PI * 2 / FT2;
-      parts.hair.forEach((h, i) => {
+      if (window.__body) {
+        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
+      }
+      parts.hair.forEach(h => {
         const g = h.userData.pivot;
         if (!g) return;
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.016 * Math.sin(ph0 - 0.55 + i * 0.2);
+        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.006 * Math.sin(ph0);
       });
-      parts.hands.forEach((h, i) => {
+      parts.hands.forEach(h => {
         const g = h.userData.pivot;
         if (!g) return;
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.012 * Math.sin(ph0 - 0.35 + (i ? 1.2 : 0));
+        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.008 * Math.sin(ph0);
       });
     }
 
@@ -438,16 +447,23 @@ function tick(){
       const g = parts.handWave;
       if (g) {
         const sx = g.userData.innerSign;           // 往身體外側
+        if (g.userData.baseX === undefined) g.userData.baseX = g.position.x;
+        if (g.userData.baseY === undefined) g.userData.baseY = g.position.y;
+        if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
+        if (g.userData.baseY2 === undefined) g.userData.baseY2 = g.userData.baseY;
         const swing = Math.sin(waveT * 13) * 0.020;
-        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.050 * env2);
-        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.080 * env2 + swing * env2;
-        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.200 * env2;
-        g.rotation.z = (-0.55 + Math.sin(waveT * 13) * 0.16) * env2 * -sx;
+        g.position.x = (g.userData.baseX ?? (g.userData.baseX = g.position.x)) - sx * (0.060 * env2);
+        g.position.y = (g.userData.baseY2 ?? (g.userData.baseY2 = g.userData.baseY)) + 0.105 * env2 + swing * env2;
+        g.position.z = (g.userData.baseZ ?? (g.userData.baseZ = g.position.z)) + 0.140 * env2;
+        const sc = 1 + 0.12 * env2;
+        g.scale.setScalar(sc);
+        const WROT = Q.has('wrot') ? parseFloat(Q.get('wrot')) : 0.55;
+        g.rotation.z = (WROT + Math.sin(waveT * 13) * 0.18) * env2 * -g.userData.innerSign;
       }
       hop.rotation.z = 0.020 * env2;
       if (waveT > DUR) {
         waveT = -1;
-        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.position.z = g.userData.baseZ; g.rotation.z = 0; }
+        if (g) { g.position.x = g.userData.baseX; g.position.y = g.userData.baseY; g.position.z = g.userData.baseZ; g.rotation.z = 0; g.scale.setScalar(1); }
         hop.rotation.z = 0;
         window.__waveZoom = 0; fitCamera();
       }
@@ -467,7 +483,7 @@ function tick(){
     if (Math.abs(squash) < 0.004) squash = 0;
     hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
     hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
-    if (Q.has('dbg')) document.title = `mr=${parts.mouth.rotation.z.toFixed(3)} ms=${parts.mouth.scale.x.toFixed(2)},${parts.mouth.scale.y.toFixed(2)} mp=${parts.mouth.position.x.toFixed(3)},${parts.mouth.position.y.toFixed(3)},${parts.mouth.position.z.toFixed(3)}`;
+    if (Q.has('dbg')) document.title = `hw=${parts.handWave?parts.handWave.rotation.z.toFixed(2):'none'} hy=${parts.handWave?parts.handWave.position.y.toFixed(2):'-'} wt=${waveT.toFixed(2)} wa=${WAVEAT} mr=${parts.mouth.rotation.z.toFixed(3)} ms=${parts.mouth.scale.x.toFixed(2)},${parts.mouth.scale.y.toFixed(2)} mp=${parts.mouth.position.x.toFixed(3)},${parts.mouth.position.y.toFixed(3)},${parts.mouth.position.z.toFixed(3)}`;
 
     // 眨眼
     if (FREEZE) {
