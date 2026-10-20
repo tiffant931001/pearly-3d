@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v16 · 緩慢漂浮 · 點一下跳 · 點兩下揮手</div>
+<div id="hint">v17 · 點一下跳 · 兩下揮手 · 三下頭髮晃</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -69,7 +69,7 @@ spin.add(hop);
 
 /* ── 狀態 ───────────────────────────────── */
 let loaded = false, baseScale = 1, modelH = 1, modelW = 1;
-const parts = { ears: [], eyes: [], arms: [], mouth: null, head: null };
+const parts = window.__parts = { ears: [], eyes: [], arms: [], mouth: null, head: null };
 const blush = [];
 const clock = new THREE.Clock();
 let t = 0;
@@ -250,14 +250,22 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       o.userData.pivot = addPivot(o, c0.x + inner*sz.x*0.20, c0.y + sz.y*0.40, inner);
     } else if (Math.abs(c0.x) > 0.18 && Math.abs(c0.x) < 0.36 && c0.y < -0.28 && sz.x < 0.45) {
       parts.hands.push(o);
-      const inner = c0.x < 0 ? 1 : -1;
-      const g = addPivot(o, c0.x + inner*sz.x*0.10, c0.y + sz.y*0.46, inner);
-      o.userData.pivot = g;                        // ← 少了這行，待機就抓不到基準值
-      if (c0.x < 0) parts.handWave = g; else parts.handOther = g;
+      o.userData.innerSign = c0.x < 0 ? 1 : -1;
+      o.userData.center = c0.clone();
     } else if (Math.abs(c0.x) < 0.06 && sz.x > 0.35 && sz.x < 0.58 && sz.y < 0.36) {
+      parts.skirtTopLocal = c0.y + sz.y * 0.5;   // body 座標（不帶世界位移）
       parts.skirt = addPivot(o, c0.x, c0.y + sz.y*0.48, 1);
     }
     if (sz.x > 0.90 && Math.abs(c0.x) < 0.10) { parts.head = o; parts.headCenter = c0.clone(); parts.headRadius = sz.x * 0.5; parts.headDepth = sz.z * 0.5; }
+  });
+
+  // 手：固定點放在裙子上緣（不是在臉旁邊），轉動時就像從身體長出來
+  const handPivotY = (parts.skirtTopLocal !== undefined ? parts.skirtTopLocal - 0.015 : -0.40);
+  parts.hands.forEach(o => {
+    const c0 = o.userData.center, inner = o.userData.innerSign;
+    const g = addPivot(o, c0.x + inner * 0.02, handPivotY, inner);
+    o.userData.pivot = g;
+    if (c0.x < 0) parts.handWave = g; else parts.handOther = g;
   });
 
   /* 腮紅：貼在臉頰，朝外 */
@@ -351,7 +359,7 @@ el.addEventListener('pointerup', e => {
 });
 
 let tapCount = 0, lastTap = -1e9;
-let waveT = -1, doubleAt = -1e9;
+let waveT = -1, hairSwingT = -1, tapTimes = [], pendingWave = null;
 let earTwitch = [-1, -1], nextTwitch = [5, 7];
 function tap(){
   // 1) 跳一下：只有站在地面時才給向上的速度（避免連點越跳越高）
@@ -362,10 +370,18 @@ function tap(){
   // 2) 腮紅閃一下
   blushAmt = Math.max(blushAmt, 0.9);
   lastTap = performance.now();
-  // 3) 點兩下 → 揮手
+  // 3) 連點判定：點兩下＝揮手、點三下＝頭髮大晃動
   const now = performance.now();
-  if (now - doubleAt < 340) { waveT = 0; doubleAt = -1e9; lastTap = now; return; }
-  doubleAt = now;
+  tapTimes = tapTimes.filter(x => now - x < 700);
+  tapTimes.push(now);
+  if (tapTimes.length >= 3) {
+    clearTimeout(pendingWave);
+    hairSwingT = 0;
+    tapTimes = [];
+  } else if (tapTimes.length === 2) {
+    clearTimeout(pendingWave);
+    pendingWave = setTimeout(() => { if (tapTimes.length === 2) waveT = 0; }, 280);
+  }
   lastTap = now;
 
   // 4) 換表情
@@ -433,12 +449,30 @@ function tick(){
       const FT2 = 4.6, BODY_A = 0.030;
       const ph0 = t * Math.PI * 2 / FT2;
       if (window.__body) {
-        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
+        let dip = 0;
+        if (hairSwingT >= 0 && hairSwingT < 0.95) {
+          const p = hairSwingT / 0.95;
+          dip = -0.012 * Math.sin(p * Math.PI * 3.2) * Math.pow(1 - p, 2);
+        }
+        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0) + dip;
       }
-      parts.hair.forEach(h => {
+      // 點三下的頭髮大晃動（0.95 秒，帶彈性，兩邊錯開）
+      let bob0 = 0, bob1 = 0;
+      if (hairSwingT >= 0) {
+        hairSwingT += dt;
+        const DUR = 0.95, p = hairSwingT / DUR;
+        if (p >= 1) { hairSwingT = -1; }
+        else {
+          const e = Math.pow(1 - p, 2);
+          bob0 = 0.075 * Math.sin(p * Math.PI * 3.2) * e;
+          bob1 = 0.075 * Math.sin((p - 0.06) * Math.PI * 3.2) * e;
+        }
+      }
+      parts.hair.forEach((h, i) => {
         const g = h.userData.pivot;
         if (!g) return;
-        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.006 * Math.sin(ph0);
+        const extra = hairSwingT >= 0 ? (i ? bob1 : bob0) : 0;
+        g.position.y = (g.userData.baseY ?? (g.userData.baseY = g.position.y)) + 0.006 * Math.sin(ph0) + extra;
       });
       parts.hands.forEach(h => {
         const g = h.userData.pivot;
