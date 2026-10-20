@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v18 · 點一下跳 · 兩下揮手 · 三下頭髮左右晃</div>
+<div id="hint">v19 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -461,8 +461,9 @@ function tick(){
         if (p >= 1) { hairSwingT = -1; }
         else {
           const e = Math.pow(1 - p, 2);
-          sw0 = 0.135 * Math.sin(p * Math.PI * 2.6) * e;         // 左右晃（繞根部）
-          sw1 = 0.135 * Math.sin((p - 0.07) * Math.PI * 2.6) * e; // 另一邊慢 0.07 秒
+          // b：兩邊相反方向（一內一外），像被風吹開
+          sw0 = 0.135 * Math.sin(p * Math.PI * 2.6) * e;
+          sw1 = -0.115 * Math.sin((p - 0.07) * Math.PI * 2.6) * e;
         }
       }
       parts.hair.forEach((h, i) => {
@@ -492,14 +493,13 @@ function tick(){
         if (g.userData.baseX === undefined) g.userData.baseX = g.position.x;
         if (g.userData.baseY === undefined) g.userData.baseY = g.position.y;
         if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
-        const swing = Math.sin(waveT * 11);
-        const lift  = Math.sin(waveT * 11 + 0.6);
-        // 往鏡頭方向抬起（繞 X 軸）＋ 上下擺 → 有深度的手揮動
-        g.rotation.x = (-WROTX + swing * 0.22) * env2;
-        g.rotation.z = (-0.18 + swing * 0.10) * env2 * -g.userData.innerSign;
-        g.position.y = g.userData.baseY + (WLIFT + lift * 0.045) * env2;
-        g.position.z = g.userData.baseZ + (0.150 + swing * 0.030) * env2;
-        g.position.x = g.userData.baseX - g.userData.innerSign * 0.020 * env2;
+        const swing = Math.sin(waveT * 9.5);
+        // i 版：往斜上舉到胸口外側（不往前伸），只做小幅左右擺
+        g.rotation.z = (-0.42 + swing * 0.10) * env2 * -g.userData.innerSign;
+        g.rotation.x = (-0.16 + swing * 0.05) * env2;
+        g.position.x = g.userData.baseX - g.userData.innerSign * 0.035 * env2;
+        g.position.y = g.userData.baseY + (0.055 + swing * 0.012) * env2;
+        g.position.z = g.userData.baseZ + 0.030 * env2;
       }
       hop.rotation.z = 0.020 * env2;
       if (waveT > DUR) {
