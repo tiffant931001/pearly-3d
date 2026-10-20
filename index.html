@@ -110,7 +110,12 @@ new GLTFLoader().load('./character.glb', (gltf) => {
   holder.scale.setScalar(baseScale);
   holder.add(body);
 
+  // 量測「縮放後」的真實尺寸，鏡頭才知道要退多遠
+  const fits = new THREE.Box3().setFromObject(holder);
+  modelSize = fits.getSize(new THREE.Vector3());
+
   camera.position.set(0, 0.06, 7.6);
+  fitCamera();
   camera.lookAt(0, 0, 0);
   loaded = true;
   window.__ready = true;
@@ -140,7 +145,19 @@ addEventListener('resize', () => {
   camera.aspect = innerWidth/innerHeight;
   camera.updateProjectionMatrix();
   renderer.setSize(innerWidth, innerHeight);
+  fitCamera();
 });
+
+// 依畫面比例自動決定鏡頭距離（用實際模型尺寸算，不靠猜）
+let modelSize = null;
+function fitCamera(){
+  if (!modelSize) return;
+  const t = Math.tan(THREE.MathUtils.degToRad(camera.fov / 2));
+  const dH = (modelSize.y / 2 * 1.22) / t;                    // 垂直留邊
+  const dW = (modelSize.x / 2 * 1.22) / (t * camera.aspect);  // 水平留邊
+  camera.position.z = Math.max(dH, dW);
+  camera.lookAt(0, 0, 0);
+}
 
 const BREATH = 2.6, LAG = 0.15;
 const setEyeOpen = v => eyes.forEach(e => { e.scale.y = v; });
