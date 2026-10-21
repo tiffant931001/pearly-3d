@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v32 · 毛帽比例 · 輕打盹</div>
+<div id="hint">v33 · 打盹 · 想睡 · 小動作</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -81,6 +81,7 @@ let expr = EXPR || 'smile';
 let MODE = 'idle';           // idle | sleep | night | overspend
 let idleT = 0, yawnT = -1, wakeT = -1;
 let jumpPhase = 'idle', crouchT = 0, hairLagT = -1, hairLagAmp = 0.06;
+let fidgetT = -1, fidgetCd = 14, fidgetKind = 'tilt';
 let blinkT = -1, nextBlink = 3.0;
 let blushAmt = 0, blushTarget = 0;
 let squash = 0, squashV = 0, jumpY = 0, jumpV = 0;
@@ -692,10 +693,61 @@ function tick(){
     if (!FREEZE) {
       const busy = dragging || (performance.now() - lastTap < 900) || (performance.now() - lastMove < 900);
       if (busy) idleT = 0; else idleT += dt;
-      if (MODE === 'idle' && idleT > 30 && yawnT < 0) { yawnT = 0; }
+      if (MODE === 'idle') {
+        // 25s：眼皮變重
+        window.__sleepyEye = (idleT > 25 && idleT < 30) ? (0.28 + 0.06 * Math.sin(t * 1.2)) : null;
+        // 30s：打哈欠
+        if (idleT > 30 && idleT < 33 && yawnT < 0) yawnT = 0;
+        // 33–36s：頭慢慢垂下去
+        if (idleT >= 33 && idleT < 36) {
+          const k = Math.min(1, (idleT - 33) / 1.2);
+          if (window.__headRotate) window.__headRotate(0, 0.02 + 0.20 * k);
+        }
+        // 36–36.6s：突然撐起來一下
+        if (idleT >= 36 && idleT < 36.6) {
+          const k = (idleT - 36) / 0.6;
+          if (window.__headRotate) window.__headRotate(0, 0.22 - 0.42 * Math.sin(k * Math.PI));
+          window.__sleepyEye = 0.85;
+        }
+        if (idleT >= 36.6 && idleT < 40) { if (window.__headRotate) window.__headRotate(0, 0.22); }
+        // 40s：真的睡著
+        if (idleT > 40) { window.__sleepyEye = null; enterSleep(); }
+      } else { window.__sleepyEye = null; }
       if (yawnT >= 0) {
         yawnT += dt;
-        if (yawnT > 1.5) { yawnT = -1; enterSleep(); }
+        if (yawnT > 1.5) { yawnT = -1; }
+      }
+
+      // 待機小動作：每 12～20 秒隨機一個（歪頭 / 抓癢）
+      if (MODE === 'idle' && fidgetT < 0 && yawnT < 0 && waveT < 0 && idleT > 4 && !dragging && idleT < 24) {
+        fidgetCd -= dt;
+        if (fidgetCd <= 0) { fidgetKind = Math.random() < 0.5 ? 'tilt' : 'scratch'; fidgetT = 0; fidgetCd = 12 + Math.random() * 8; }
+      }
+      if (MODE !== 'idle' && fidgetT >= 0) { fidgetT = -1; if (window.__headRotate) window.__headRotate(0, 0); }
+      if (fidgetT >= 0) {
+        fidgetT += dt;
+        const sss = x => x * x * (3 - 2 * x);
+        if (fidgetKind === 'tilt') {
+          const D = 2.6, p = fidgetT / D;
+          const env = sss(Math.min(p / 0.19, 1)) * sss(Math.min((1 - p) / 0.19, 1));
+          if (window.__headRotate) window.__headRotate(0.26 * env, 0.01 * env);
+          if (p >= 1) { fidgetT = -1; if (window.__headRotate) window.__headRotate(0, 0); }
+        } else {
+          const D = 1.8, p = fidgetT / D;
+          const env = sss(Math.min(p / 0.25, 1)) * sss(Math.min((1 - p) / 0.25, 1));
+          const g = parts.handWave;
+          if (g) {
+            if (g.userData.baseY === undefined) { g.userData.baseY = g.position.y; g.userData.baseX = g.position.x; }
+            const shake = Math.sin(fidgetT * 16) * 0.05 * env;
+            g.rotation.z = (-0.58 * env + shake) * -g.userData.innerSign;
+            g.rotation.x = -0.06 * env;
+            g.position.y = g.userData.baseY + 0.105 * env;
+          }
+          if (p >= 1) {
+            fidgetT = -1;
+            if (g) { g.rotation.z = 0; g.rotation.x = 0; g.position.y = g.userData.baseY; }
+          }
+        }
       }
       if (sky && sky.visible) {
         sky.children.forEach(o => {
@@ -835,7 +887,9 @@ function tick(){
       if (FORCE_BLINK) setEyeOpen(0.06);
     } else {
       const sleepingNow = (MODE === 'sleep' || MODE === 'night') && wakeT < 0 && performance.now() > snoozeUntil;
-      if (window.__startleEye != null) {
+      if (window.__sleepyEye != null) {
+        setEyeOpen(window.__sleepyEye);
+      } else if (window.__startleEye != null) {
         setEyeOpen(window.__startleEye);          // 驚醒：眼睛慢慢睜，不突然張大
       } else if (yawnT >= 0) {
         setEyeOpen(0.42 + 0.18 * Math.sin(yawnT * 6));
@@ -1086,21 +1140,16 @@ function buildCap() {
   cap.add(capA, capC);
   capC.visible = false;
   cap.userData.A = capA; cap.userData.C = capC;
-  cap.position.set(local.x, local.y, local.z);
-  cap.rotation.z = 0.14;
-  cap.scale.setScalar(0.62 / (baseScale || 1));
   cap.visible = false;
-  // 直接掛在「頭」底下：頭轉到哪帽子就跟到哪，不可能漂浮
-  window.__body.updateWorldMatrix(true, true);
-  parts.head.updateWorldMatrix(true, true);
-  const hb = new THREE.Box3().setFromObject(parts.head);
-  const topW = new THREE.Vector3((hb.min.x + hb.max.x) / 2, hb.max.y, (hb.min.z + hb.max.z) / 2);
-  const topL = parts.head.worldToLocal(topW.clone());   // 頭頂在「頭」的座標系
-  cap.position.set(topL.x, topL.y - 0.030, topL.z);   // 帽沿剛好坐在頭頂，不大縫也不埋進去
-  cap.rotation.z = 0.04;   // 幾乎不歪
-  // 帽子尺寸要換算成頭的座標系
-  const headScaleW = new THREE.Vector3(); parts.head.getWorldScale(headScaleW);
-  cap.scale.setScalar(1.02 / (baseScale || 1) * (baseScale / (headScaleW.x || 1)));   // 帽寬 ≈ 頭的 62%
+  // 用「幾何本身的包圍盒」定位：頭不管轉到什麼角度，帽子的位置都不會飄
+  if (!parts.head.geometry.boundingBox) parts.head.geometry.computeBoundingBox();
+  const gb = parts.head.geometry.boundingBox;
+  const hs = new THREE.Vector3(); parts.head.getWorldScale(hs);
+  const headH = gb.max.y - gb.min.y;
+  cap.position.set((gb.min.x + gb.max.x) / 2, gb.max.y - headH * 0.05, (gb.min.z + gb.max.z) / 2);
+  cap.rotation.z = 0.04;
+  const headW = gb.max.x - gb.min.x;
+  cap.scale.setScalar(0.52 * headW);   // 帽寬 ≈ 頭寬 52%（帽體直徑 1.0 單位）
   parts.head.add(cap);
   window.__cap = cap;
 }
@@ -1212,6 +1261,8 @@ function setMode(m) {
   }
 }
 window.__setMode = setMode;
+window.__idleSet = v => { idleT = v; };
+window.__fidget = k => { fidgetKind = k || 'scratch'; fidgetT = 0; };
 
 /* ── 展示台按鈕 ── */
 (function buildBar() {
