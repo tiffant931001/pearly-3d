@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v31 · 帽子貼頭 · 腮紅柔邊</div>
+<div id="hint">v32 · 毛帽比例 · 輕打盹</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -917,7 +917,7 @@ function tick(){
       if (cyc < 0.60) nod = Math.pow(cyc / 0.60, 0.85);          // 2.4 秒慢慢沉下去
       else if (cyc < 0.69) { const k = (cyc - 0.60) / 0.09; nod = (1 - k) * (1 + 0.12 * Math.sin(k * Math.PI)); }  // 0.36 秒抬起，帶回彈
       else nod = 0;                                               // 之後撐著 1.4 秒
-      if (window.__headRotate) window.__headRotate(0, 0.06 + 0.30 * nod);
+      if (window.__headRotate) window.__headRotate(0.105 * Math.sin(t * 0.85), 0.05 + 0.13 * nod);   // 點頭小(7.4°)、左右晃大(12°)
       window.__lift = 0;            // 身體完全不動
     }
 
@@ -1096,11 +1096,11 @@ function buildCap() {
   const hb = new THREE.Box3().setFromObject(parts.head);
   const topW = new THREE.Vector3((hb.min.x + hb.max.x) / 2, hb.max.y, (hb.min.z + hb.max.z) / 2);
   const topL = parts.head.worldToLocal(topW.clone());   // 頭頂在「頭」的座標系
-  cap.position.set(topL.x, topL.y + 0.01, topL.z);
-  cap.rotation.z = 0.14;
+  cap.position.set(topL.x, topL.y - 0.030, topL.z);   // 帽沿剛好坐在頭頂，不大縫也不埋進去
+  cap.rotation.z = 0.04;   // 幾乎不歪
   // 帽子尺寸要換算成頭的座標系
   const headScaleW = new THREE.Vector3(); parts.head.getWorldScale(headScaleW);
-  cap.scale.setScalar(0.62 / (baseScale || 1) * (baseScale / (headScaleW.x || 1)));
+  cap.scale.setScalar(1.02 / (baseScale || 1) * (baseScale / (headScaleW.x || 1)));   // 帽寬 ≈ 頭的 62%
   parts.head.add(cap);
   window.__cap = cap;
 }
