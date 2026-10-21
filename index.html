@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v34 · 待機動作拆成按鈕</div>
+<div id="hint">v35 · 平順帽子 · 打盹側沉</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -278,9 +278,9 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
 
   /* 頭部旋轉：側傾(aZ) + 前後點頭(aX)，眼睛嘴巴腮紅全部跟著同一個脖子點 */
-  window.__headRotate = function (aZ, aX) {
+  window.__headRotate = function (aZ, aX, aY) {
     if (!parts.head) return;
-    aZ = aZ || 0; aX = aX || 0;
+    aZ = aZ || 0; aX = aX || 0; aY = aY || 0;
     const list = [parts.head, ...(parts.eyes || []), parts.mouth, parts.mouthLine, ...(parts.blushList || [])].filter(Boolean);
     const neckY = (parts.headCenter ? parts.headCenter.y : 0) - (parts.headRadius || 0.49) * 0.72;
     const neckZ = parts.headCenter ? parts.headCenter.z : 0;
@@ -289,7 +289,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     list.forEach(m => {
       if (m.userData._bx === undefined) {
         m.userData._bx = m.position.x; m.userData._by = m.position.y; m.userData._bz = m.position.z;
-        m.userData._br = m.rotation.z; m.userData._rx = m.rotation.x;
+        m.userData._br = m.rotation.z; m.userData._rx = m.rotation.x; m.userData._ry = m.rotation.y;
       }
       const x = m.userData._bx;
       const y = m.userData._by - neckY;
@@ -298,11 +298,20 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       const y1 = x * s1 + y * c1;
       const y2 = y1 * c2 - z * s2;         // 點頭（繞 X）
       const z2 = y1 * s2 + z * c2;
-      m.position.set(x1, neckY + y2, neckZ + z2);
-      if (m !== parts.mouth && m !== parts.mouthLine) {
+      // 左右轉頭（繞 Y，脖子為中心）
+      const c3 = Math.cos(aY), s3 = Math.sin(aY);
+      const x3 = x1 * c3 + z2 * s3;
+      const z3 = -x1 * s3 + z2 * c3;
+      m.position.set(x3, neckY + y2, neckZ + z3);
+      if (m === parts.mouth) {
+        m.rotation.z = (window.__exprZ || 0) + aZ;      // 表情角度不能被頭的旋轉蓋掉
+      } else if (m === parts.mouthLine) {
+        m.rotation.z = (m.userData._br || 0) + aZ;
+      } else {
         m.rotation.z = m.userData._br + aZ;
-        m.rotation.x = m.userData._rx + aX;
       }
+      m.rotation.x = m.userData._rx + aX;
+      m.rotation.y = (m.userData._ry || 0) + aY;
     });
   };
 
@@ -386,6 +395,7 @@ window.__exprGet = () => ({ expr, waveT, tapTimes: tapTimes.length, pending: pen
 function setEyeOpen(v){ parts.eyes.forEach(e => { e.scale.y = v; }); }
 function applyExpression(instant){
   const m = parts.mouth;
+  window.__exprZ = (expr === 'smile') ? Math.PI : 0;
   if (!m) return;
   const line = parts.mouthLine;
   m.rotation.z = 0; m.scale.set(1, 1, 1);
@@ -730,7 +740,7 @@ function tick(){
         if (fidgetKind === 'tilt') {
           const D = 2.6, p = fidgetT / D;
           const env = sss(Math.min(p / 0.19, 1)) * sss(Math.min((1 - p) / 0.19, 1));
-          if (window.__headRotate) window.__headRotate(0.26 * env, 0.01 * env);
+          if (window.__headRotate) window.__headRotate(0.145 * env, 0.02 * env, 0.10 * env);
           if (p >= 1) { fidgetT = -1; if (window.__headRotate) window.__headRotate(0, 0); }
         } else {
           const D = 1.8, p = fidgetT / D;
@@ -1087,19 +1097,16 @@ function buildCap() {
     t.colorSpace = THREE.SRGBColorSpace;
     return t;
   })();
-  const pink = new THREE.MeshStandardMaterial({ color: 0xffffff, map: knitTex, roughness: 1.0, flatShading: true });
-  const white = new THREE.MeshStandardMaterial({ color: 0xfff8fb, roughness: 1.0, flatShading: true });
+  const pink = new THREE.MeshStandardMaterial({ color: 0xedaac9, roughness: 0.92, flatShading: true, emissive: 0x1a0509, emissiveIntensity: 0.03 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xfbf6f8, roughness: 0.92, flatShading: true });
 
-  /* ── A：圓頂毛帽（半球帽身 + 帽沿 + 毛球） ── */
+  /* ── A：跟角色同材質的圓頂帽（平順、無噪音、flatShading） ── */
   const capA = new THREE.Group();
-  const dome = new THREE.Mesh(
-    noiseDisplace(new THREE.SphereGeometry(0.50, 30, 16, 0, Math.PI * 2, 0, Math.PI * 0.52), 0.013),
-    pink);
+  const dome = new THREE.Mesh(new THREE.SphereGeometry(0.50, 26, 14, 0, Math.PI * 2, 0, Math.PI * 0.52), pink);
   dome.scale.y = 0.82; dome.position.y = 0.10;
-  const brim = new THREE.Mesh(
-    noiseDisplace(new THREE.TorusGeometry(0.485, 0.075, 10, 34), 0.008), pink);
+  const brim = new THREE.Mesh(new THREE.TorusGeometry(0.485, 0.070, 8, 26), pink);
   brim.rotation.x = Math.PI / 2; brim.position.y = 0.10;
-  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.135, 20, 15), 0.018), white);
+  const pomA = new THREE.Mesh(new THREE.SphereGeometry(0.135, 18, 12), white);
   pomA.position.y = 0.52;
   capA.add(dome, brim, pomA);
 
