@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v24 · 點一下跳 · 兩下揮手 · 三下晃耳朵</div>
+<div id="hint">v25 · 展示台（待機/睡覺/晚上/超支）</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -77,6 +77,10 @@ let t = 0;
 let yaw = 0, pitch = 0, yawV = 0, pitchV = 0;      // 拖曳
 let dragging = false, lastX = 0, lastY = 0, lastMove = 0;
 let expr = EXPR || 'smile';
+/* ── 模式與待機狀態 ── */
+let MODE = 'idle';           // idle | sleep | night | overspend
+let idleT = 0, yawnT = -1, wakeT = -1;
+let jumpPhase = 'idle', crouchT = 0;
 let blinkT = -1, nextBlink = 3.0;
 let blushAmt = 0, blushTarget = 0;
 let squash = 0, squashV = 0, jumpY = 0, jumpV = 0;
@@ -245,7 +249,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     const bb = new THREE.Box3().setFromObject(o);
     const sz = bb.getSize(new THREE.Vector3());
     const c0 = bb.getCenter(new THREE.Vector3());
-    if (sz.x > 0.50 && sz.y > 0.60 && c0.y > 0.05) {
+    if (o !== parts.head && sz.x > 0.50 && sz.y > 0.60 && c0.y > 0.05 && o.geometry.attributes.position.count < 150) {
       parts.hair.push(o);
       const inner = c0.x < 0 ? 1 : -1;
       o.userData.pivot = addPivot(o, c0.x + inner*sz.x*0.28, c0.y - sz.y*0.28, inner);
@@ -281,7 +285,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       const x = m.userData._bx, y = m.userData._by - neckY;
       m.position.x = x * c - y * sn;
       m.position.y = neckY + (x * sn + y * c);
-      m.rotation.z = m.userData._br + a;
+      if (m !== parts.mouth && m !== parts.mouthLine) m.rotation.z = m.userData._br + a;
     });
   };
 
@@ -386,6 +390,7 @@ el.addEventListener('pointermove', e => {
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
   const K = 0.012;
+  idleT = 0; lastTap = performance.now();
   yaw   += dx * K;                       // 直接跟手
   pitch += dy * K * 0.55;
   yawV   = dx * K * 14;                  // 放開後的慣性
@@ -404,6 +409,8 @@ let tapCount = 0, lastTap = -1e9;
 let waveT = -1, hairSwingT = -1, tapTimes = [], pendingWave = null, pendingJump = null;
 let earTwitch = [-1, -1], nextTwitch = [5, 7];
 function tap(){
+  idleT = 0;
+  if (MODE === 'sleep' || MODE === 'night') { setMode('idle'); return; }
   // 腮紅立刻回饋（不等判定）
   blushAmt = Math.max(blushAmt, 0.9);
   const now = performance.now();
@@ -416,12 +423,12 @@ function tap(){
     clearTimeout(pendingJump);
     pendingJump = setTimeout(() => {
       if (tapTimes.length === 1) {
-        if (jumpY <= 0.001) { squash = -0.30; jumpV = 3.1; }
+        if (jumpPhase === 'idle' && jumpY <= 0.001) { jumpPhase = 'crouch'; crouchT = 0; }
         tapCount++;
         if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
         applyExpression();
       }
-    }, 230);
+    }, 120);
   } else if (n === 2) {
     clearTimeout(pendingJump);
     clearTimeout(pendingWave);
@@ -493,9 +500,34 @@ function tick(){
     hop.scale.set(baseScale, baseScale, baseScale);
 
 
+    // 22:00 之後（或 06:00 前）自動進入晚上模式
+    if (loaded && !window.__autoNight) {
+      window.__autoNight = true;
+      const hh = new Date().getHours();
+      if (hh >= 22 || hh < 6) setMode('night');
+    }
+
+    // 待機 30 秒（任何點擊或拖曳都重新計時）→ 打哈欠 → 睡著
+    if (!FREEZE) {
+      const busy = dragging || (performance.now() - lastTap < 900) || (performance.now() - lastMove < 900);
+      if (busy) idleT = 0; else idleT += dt;
+      if (MODE === 'idle' && idleT > 30 && yawnT < 0) { yawnT = 0; }
+      if (yawnT >= 0) {
+        yawnT += dt;
+        if (yawnT > 1.5) { yawnT = -1; enterSleep(); }
+      }
+      if (sky && sky.visible) {
+        sky.children.forEach(o => {
+          if (o.userData.tw !== undefined) o.material.opacity = 0.30 + 0.55 * (0.5 + 0.5 * Math.sin(t * 2.2 + o.userData.tw));
+        });
+      }
+    }
+
     // 待機：整隻（頭+身體）一起慢慢上下漂浮；頭髮與手只做極小幅度的同相位浮動
     if (!FREEZE) {
-      const FT2 = 4.6, BODY_A = 0.030;
+      const nightOrSleep = (MODE === 'sleep' || MODE === 'night');
+      const FT2 = nightOrSleep ? 6.2 : 4.6;
+      const BODY_A = (MODE === 'overspend' || yawnT >= 0) ? 0.006 : (nightOrSleep ? 0.013 : 0.030);
       const ph0 = t * Math.PI * 2 / FT2;
       if (window.__body) {
         window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
@@ -567,19 +599,27 @@ function tick(){
     }
 
 
-    // 跳躍（重力）：只有真的在跳的時候才算，靜止時完全不跑
-    if (!FREEZE && (jumpY > 0 || jumpV !== 0)) {
-      jumpV -= 10.0 * dt;
-      jumpY += jumpV * dt;
-      if (jumpY <= 0) { jumpY = 0; jumpV = 0; hop.position.y = 0; squash = 0.22; }   // 落地壓一下
-      else hop.position.y = jumpY;
+    // 跳躍：蹲下預備(0.09s) → 起飛 → 重力 → 落地
+    if (!FREEZE) {
+      if (jumpPhase === 'crouch') {
+        crouchT += dt;
+        const k = Math.min(crouchT / 0.09, 1);
+        squash = 0.13 * k; squashV = 0;                 // 蹲：壓扁
+        if (k >= 1) { jumpPhase = 'air'; jumpV = 3.2; squash = -0.07; squashV = 0; }  // 起飛：拉長
+      } else if (jumpPhase === 'air') {
+        jumpV -= 11.0 * dt;
+        jumpY += jumpV * dt;
+        if (jumpY <= 0) { jumpY = 0; jumpV = 0; hop.position.y = 0; jumpPhase = 'idle'; squash = 0.20; squashV = 0; }
+        else hop.position.y = jumpY;   // 落地：壓縮後由彈簧回彈
+      }
     }
 
-    // 擠壓：改成「固定時間衰減」，不會累積、也不會卡住
-    squash *= Math.exp(-13.0 * dt);
-    if (Math.abs(squash) < 0.004) squash = 0;
-    hop.scale.x *= 1 + squash * 0.16;   // squash 為負 → 變窄
-    hop.scale.y *= 1 - squash * 0.12;   // 同時變高（總變形 < 5%）
+    // 擠壓彈簧（會回彈、不會卡住）
+    squashV += (-300 * squash - 17 * squashV) * dt;
+    squash += squashV * dt;
+    squash = THREE.MathUtils.clamp(squash, -0.20, 0.22);
+    hop.scale.x *= 1 + squash * 0.30;
+    hop.scale.y *= 1 - squash * 0.34;
     if (Q.has('jit')) {
       const by = (window.__body ? window.__body.position.y : 0);
       window.__jb = window.__jb || {prev: by, max: 0, sum: 0, n: 0, prevT: t};
@@ -595,6 +635,17 @@ function tick(){
     if (FREEZE) {
       if (FORCE_BLINK) setEyeOpen(0.06);
     } else {
+      const sleepingNow = (MODE === 'sleep' || MODE === 'night') && wakeT < 0;
+      if (yawnT >= 0) {
+        setEyeOpen(0.42 + 0.18 * Math.sin(yawnT * 6));
+      } else if (sleepingNow) {
+        setEyeOpen(0.07);
+      } else if (wakeT >= 0) {
+        wakeT += dt;
+        const k = Math.min(wakeT / 0.45, 1);
+        setEyeOpen(1 + 0.18 * Math.sin(k * Math.PI));
+        if (wakeT > 0.6) { wakeT = -1; setEyeOpen(1); }
+      } else {
       nextBlink -= dt;
       if (nextBlink <= 0 && blinkT < 0) { blinkT = 0; nextBlink = 2.8 + Math.random()*3.4; }
       if (blinkT >= 0) {
@@ -604,10 +655,11 @@ function tick(){
         setEyeOpen(1 - 0.94 * easeInOut(k));
         if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
       }
+      }
     }
 
     // 4 秒沒互動 → 表情自動回到笑臉
-    if (!FREEZE && expr !== 'smile' && performance.now() - lastTap > 4000) { expr = 'smile'; applyExpression(); }
+    if (!FREEZE && MODE === 'idle' && expr !== 'smile' && performance.now() - lastTap > 4000) { expr = 'smile'; applyExpression(); }
 
     // 腮紅：點擊閃一下，再慢慢退
     if (SHOW_BLUSH) blushAmt = 0.85;
@@ -617,6 +669,132 @@ function tick(){
 
   renderer.render(scene, camera);
 }
+
+/* ── 睡覺 / 晚上 / 超支 ── */
+let sky = null, cap = null, NIGHT = false;
+const BG_DAY = '';
+const BG_NIGHT = 'linear-gradient(180deg,#2a2350 0%,#3b2f66 45%,#5a4180 75%,#7a5390 100%)';
+const BG_OVER  = 'linear-gradient(180deg,#dfe3ee 0%,#e8dbe4 60%,#efd6dc 100%)';
+
+function buildSky() {
+  if (sky) return;
+  sky = new THREE.Group();
+  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const c = cv.getContext('2d');
+  const g = c.createRadialGradient(64, 64, 8, 64, 64, 62);
+  g.addColorStop(0, 'rgba(255,252,224,1)');
+  g.addColorStop(0.55, 'rgba(255,240,185,0.95)');
+  g.addColorStop(1, 'rgba(255,235,160,0)');
+  c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
+  const moon = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5),
+    new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }));
+  moon.position.set(-2.05, 1.55, -3.2);
+  sky.add(moon);
+  for (let i = 0; i < 26; i++) {
+    const r = 0.035 + Math.random() * 0.055;
+    const st = new THREE.Mesh(new THREE.CircleGeometry(r, 8),
+      new THREE.MeshBasicMaterial({ color: 0xfff6cf, transparent: true, opacity: 0.85, depthWrite: false, toneMapped: false }));
+    st.position.set((Math.random() - 0.5) * 7.5, (Math.random() - 0.15) * 4.4, -3 - Math.random() * 0.8);
+    st.userData.tw = Math.random() * 6.28;
+    sky.add(st);
+  }
+  sky.visible = false;
+  scene.add(sky);
+}
+
+function buildCap() {
+  if (cap || !parts.head) return;
+  const bb = new THREE.Box3().setFromObject(parts.head);
+  const topWorld = new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.max.y, (bb.min.z + bb.max.z) / 2);
+  const local = window.__body.worldToLocal(topWorld.clone());
+  const pink  = new THREE.MeshStandardMaterial({ color: 0xff9ecb, roughness: 0.8, flatShading: true, emissive: 0x442233, emissiveIntensity: 0.06 });
+  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
+  cap = new THREE.Group();
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.66, 12, 1), pink);
+  cone.position.y = 0.30;
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 12, 1, true), pink);
+  band.position.y = 0.02;
+  const pom = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), white);
+  pom.position.y = 0.66;
+  cap.add(cone, band, pom);
+  cap.position.set(local.x, local.y + 0.02, local.z);
+  cap.rotation.z = 0.14;
+  cap.scale.setScalar(1 / (baseScale || 1));
+  cap.visible = false;
+  window.__body.add(cap);
+}
+
+function enterSleep() {
+  MODE = (NIGHT ? 'night' : 'sleep');
+  wakeT = -1;
+  expr = 'smile'; applyExpression(true);
+  if (window.__headRotate) window.__headRotate(-0.05);
+}
+function enterWake() {
+  MODE = 'idle';
+  wakeT = 0; idleT = 0; yawnT = -1;
+  if (window.__headRotate) window.__headRotate(0);
+  expr = 'smile'; applyExpression(true);
+}
+function setMode(m) {
+  buildSky(); buildCap();
+  if (m === 'night') {
+    NIGHT = true;
+    document.body.style.background = BG_NIGHT;
+    if (sky) sky.visible = true;
+    if (cap) cap.visible = true;
+    enterSleep();
+  } else if (m === 'sleep') {
+    NIGHT = false;
+    document.body.style.background = BG_DAY;
+    if (sky) sky.visible = false;
+    if (cap) cap.visible = false;
+    enterSleep();
+  } else if (m === 'overspend') {
+    MODE = 'overspend';
+    NIGHT = false;
+    document.body.style.background = BG_OVER;
+    if (sky) sky.visible = false;
+    if (cap) cap.visible = false;
+    idleT = 0; wakeT = 0; setEyeOpen(1);
+    if (window.__headRotate) window.__headRotate(-0.07);
+    expr = 'sad'; applyExpression(true);
+  } else {   // idle / wake
+    MODE = 'idle'; NIGHT = false;
+    document.body.style.background = BG_DAY;
+    if (sky) sky.visible = false;
+    if (cap) cap.visible = false;
+    enterWake();
+  }
+}
+window.__setMode = setMode;
+
+/* ── 展示台按鈕 ── */
+(function buildBar() {
+  const bar = document.createElement('div');
+  bar.style.cssText = 'position:fixed;left:0;right:0;bottom:0;display:flex;flex-wrap:wrap;gap:6px;padding:9px 9px 12px;overflow:visible;z-index:99;background:rgba(255,255,255,.62);backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);border-top:1px solid rgba(0,0,0,.06)';
+  const mk = (label, fn) => {
+    const b = document.createElement('button');
+    b.textContent = label;
+    b.style.cssText = 'flex:0 0 auto;padding:7px 11px;border-radius:11px;border:none;background:#ffd9ea;color:#8a3a63;font-size:13px;font-weight:700;font-family:inherit;box-shadow:0 2px 0 rgba(180,90,130,.25)';
+    b.onclick = ev => { ev.stopPropagation(); fn(); };
+    bar.appendChild(b);
+  };
+  mk('待機', () => setMode('idle'));
+  mk('睡覺', () => setMode('sleep'));
+  mk('起床', () => setMode('idle'));
+  mk('晚上', () => setMode('night'));
+  mk('超支', () => setMode('overspend'));
+  mk('晃耳朵', () => { hairSwingT = 0; });
+  mk('揮手', () => { waveT = 0; expr = 'smile'; applyExpression(true); });
+  mk('跳', () => { if (jumpPhase === 'idle' && jumpY <= 0.001) { jumpPhase = 'crouch'; crouchT = 0; } });
+  document.body.appendChild(bar);
+  // 把原本的說明文字往上移
+  const hint = document.querySelector('.hint, #hint');
+  if (hint) hint.style.bottom = '108px';
+})();
+
 renderer.setAnimationLoop(tick);
 </script>
 </body>
