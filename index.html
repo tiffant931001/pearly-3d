@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v28 · 腮紅校正 · 內疚 · 慢睜眼</div>
+<div id="hint">v29 · 小被子 · ZZZ · 打盹只動頭</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -324,11 +324,11 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
         const l = body.worldToLocal(w.clone());
         ex = Math.abs(l.x) * 1.02; ey = l.y; ez = l.z;
       }
-      m.position.set(sx * ex * 1.06, ey - 0.072, ez + 0.052);
+      m.position.set(sx * ex * 1.06, ey - 0.072, ez + 0.028);   // 貼近臉頰，不壓在眼睛上
       m.rotation.y = sx * 0.26;
       body.add(m);
       (parts.blushList = parts.blushList || []).push(m);
-      m.renderOrder = 10;
+      m.renderOrder = -1;   // 畫在眼睛後面
       blush.push(m);
 
     });
@@ -336,6 +336,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
   camera.position.set(0, 0.05, 6.2);
   fitCamera();
+  buildBlanket();
   if (Q.has('list')) { const out=[]; body.traverse(o=>{ if(o.isMesh && o.geometry){ const bb=new THREE.Box3().setFromObject(o); const sz=new THREE.Vector3(); bb.getSize(sz); const c=new THREE.Vector3(); bb.getCenter(c); out.push([o.name, +c.x.toFixed(2), +c.y.toFixed(2), +c.z.toFixed(2), +sz.x.toFixed(2), +sz.y.toFixed(2), +sz.z.toFixed(2), o.geometry.attributes.position.count]); } }); document.title = 'LIST'+JSON.stringify(out); }
   if (Q.has('bl')) { const info=[]; blush.forEach(b=>{ b.updateWorldMatrix(true,false); const w=new THREE.Vector3(); b.getWorldPosition(w); info.push({local:[+b.position.x.toFixed(2),+b.position.y.toFixed(2),+b.position.z.toFixed(2)], world:[+w.x.toFixed(2),+w.y.toFixed(2),+w.z.toFixed(2)], parent: b.parent.type + ':' + [b.parent.position.x.toFixed(2),b.parent.position.y.toFixed(2)].join(',')}); }); document.title='BL'+JSON.stringify(info); }
   if (Q.has('hh')) { parts.hands.forEach(h=>h.visible=false); }
@@ -378,9 +379,99 @@ function applyExpression(instant){
   blushTarget = 0;   // 靜止時不上腮紅，點了才冒
 }
 
+/* ── 小被子（抓著一個角） ─────────────────── */
+let blanket = null;
+function buildBlanket() {
+  if (blanket || !parts.handOther || !window.__body) return;
+  const cv = document.createElement('canvas'); cv.width = 256; cv.height = 256;
+  const c = cv.getContext('2d');
+  c.fillStyle = '#ffc4dc'; c.fillRect(0, 0, 256, 256);
+  c.fillStyle = 'rgba(255,255,255,0.95)';
+  for (let y = 0; y < 256; y += 40) {
+    for (let x = 0; x < 256; x += 40) {
+      c.beginPath(); c.arc(x + ((y / 40) % 2 ? 20 : 0), y + 16, 6, 0, Math.PI * 2); c.fill();
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.colorSpace = THREE.SRGBColorSpace; tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(1.6, 1.6);
+
+  const geo = new THREE.PlaneGeometry(1, 1, 10, 12);
+  const pos = geo.attributes.position;
+  const W = 0.70, H = 0.86;
+  for (let i = 0; i < pos.count; i++) {
+    const u = pos.getX(i) + 0.5, v0 = 0.5 - pos.getY(i);
+    const wf = 0.34 + 0.66 * v0;                       // 上方（抓角）窄、下方寬
+    pos.setXYZ(i,
+      (u - 0.5) * W * wf,
+      -v0 * H,
+      0.10 * Math.sin(v0 * Math.PI * 0.9) + 0.05 * Math.sin(u * Math.PI * 1.7) * v0);
+  }
+  geo.computeVertexNormals();
+  blanket = new THREE.Mesh(geo, new THREE.MeshStandardMaterial({ map: tex, roughness: 0.95, side: THREE.DoubleSide, flatShading: true }));
+  const wp = new THREE.Vector3();
+  parts.handOther.getWorldPosition(wp);
+  const l = window.__body.worldToLocal(wp.clone());
+  blanket.position.set(l.x + Math.sign(l.x || 1) * 0.13, l.y - 0.02, l.z + 0.16);   // 角角抓在手上，往前一點才看得出抓著
+  blanket.scale.setScalar(1.55 / (baseScale || 1));
+  blanket.rotation.z = -0.10;
+  window.__body.add(blanket);
+  window.__blanket = blanket;
+}
+
+/* ── ZZZ（睡覺時 2D 圖層） ───────────────── */
+const zzzEls = [];
+function buildZZZ() {
+  if (zzzEls.length) return;
+  for (let i = 0; i < 3; i++) {
+    const d = document.createElement('div');
+    d.textContent = 'Z';
+    d.style.cssText = 'position:fixed;left:0;top:0;pointer-events:none;z-index:62;font:900 20px/1 system-ui,sans-serif;'
+      + 'color:#8fb0ff;text-shadow:0 2px 0 #fff,0 0 6px rgba(255,255,255,.9);opacity:0;will-change:transform,opacity';
+    document.body.appendChild(d);
+    zzzEls.push(d);
+  }
+}
+
+/* ── 杯子道具（可拖曳） ─────────────────── */
+let cup = null, cupDrag = false, cupPos = new THREE.Vector3(0.95, -0.98, 0.55);
+function buildCup() {
+  if (cup) return;
+  cup = new THREE.Group();
+  const mat = new THREE.MeshStandardMaterial({ color: 0xfff1f6, roughness: 0.55, flatShading: true });
+  const inner = new THREE.MeshStandardMaterial({ color: 0xffd9e8, roughness: 0.7 });
+  const bodyG = new THREE.Mesh(new THREE.CylinderGeometry(0.16, 0.135, 0.24, 18, 1, true), mat);
+  const bottom = new THREE.Mesh(new THREE.CircleGeometry(0.135, 18), mat);
+  bottom.rotation.x = -Math.PI / 2; bottom.position.y = -0.12;
+  const coffee = new THREE.Mesh(new THREE.CircleGeometry(0.15, 18), inner);
+  coffee.rotation.x = -Math.PI / 2; coffee.position.y = 0.09;
+  const handle = new THREE.Mesh(new THREE.TorusGeometry(0.075, 0.022, 8, 14, Math.PI * 1.4), mat);
+  handle.position.set(0.17, 0, 0); handle.rotation.y = Math.PI / 2; handle.rotation.z = -0.4;
+  const hit = new THREE.Mesh(new THREE.SphereGeometry(0.30, 8, 6), new THREE.MeshBasicMaterial({ visible: false }));
+  cup.add(bodyG, bottom, coffee, handle, hit);
+  cup.position.copy(cupPos);
+  cup.scale.setScalar(2.1 / baseScale);
+  scene.add(cup);
+}
+const ray = new THREE.Raycaster();
+function cupHit(cx, cy) {
+  if (!cup) return false;
+  const v = new THREE.Vector3();
+  cup.getWorldPosition(v);
+  v.project(camera);
+  const sx = (v.x * 0.5 + 0.5) * innerWidth;
+  const sy = (-v.y * 0.5 + 0.5) * innerHeight;
+  return Math.hypot(cx - sx, cy - sy) < 70;      // 螢幕 70px 內就算抓到杯子
+}
+
 /* ── 互動 ───────────────────────────────── */
 const el = renderer.domElement;
 el.addEventListener('pointerdown', e => {
+  if (cupHit(e.clientX, e.clientY)) {
+    cupDrag = true; el.setPointerCapture(e.pointerId);
+    el.dataset.dragged = '1';
+    return;
+  }
   if (MODE === 'sleep' || MODE === 'night') {
     const bub = hitBubble(e.clientX, e.clientY);
     if (bub) { popBubble(bub); return; }        // 點破泡泡 → 嚇醒
@@ -390,6 +481,16 @@ el.addEventListener('pointerdown', e => {
   el.setPointerCapture(e.pointerId);
 });
 el.addEventListener('pointermove', e => {
+  if (cupDrag && cup) {
+    const v = new THREE.Vector2((e.clientX / innerWidth) * 2 - 1, -(e.clientY / innerHeight) * 2 + 1);
+    const wp = new THREE.Vector3(v.x, v.y, 0.5).unproject(camera);
+    const dir = wp.sub(camera.position).normalize();
+    const t = (0.55 - camera.position.z) / dir.z;
+    cup.position.copy(camera.position).add(dir.multiplyScalar(t));
+    cup.position.z = 0.55;
+    cupPos.copy(cup.position);
+    return;
+  }
   if (!dragging) return;
   const dx = e.clientX - lastX, dy = e.clientY - lastY;
   lastX = e.clientX; lastY = e.clientY;
@@ -403,6 +504,7 @@ el.addEventListener('pointermove', e => {
   if (Math.abs(dx) + Math.abs(dy) > 2) el.dataset.dragged = '1';
 });
 el.addEventListener('pointerup', e => {
+  if (cupDrag) { cupDrag = false; return; }
   dragging = false;
   el.releasePointerCapture?.(e.pointerId);
   if (el.dataset.dragged !== '1') tap();
@@ -534,7 +636,8 @@ function tick(){
         u.life += dt;
         const p = u.life / u.dur;
         if (p >= 1) { b.visible = false; u.alive = false; u.popT = -1; return; }
-        b.position.y += dt * 0.30;
+        b.position.y += dt * 0.26;
+        b.scale.multiplyScalar(1 + dt * 0.30);
         b.position.x += dt * 0.015;
         b.scale.setScalar(1 + 0.35 * p);
         b.material.opacity = 0.42 * (1 - Math.max(0, (p - 0.72) / 0.28));
@@ -559,9 +662,10 @@ function tick(){
       }
       window.__lift = lift;
       hop.rotation.z += shake;
+      hop.rotation.x = -0.10 * Math.max(0, 1 - st / 0.30);   // 往後一震
       if (window.__headRotate) window.__headRotate(0, back + 0.05);
       window.__startleEye = eyeK;
-      if (st > 0.72) { startled = -1; window.__startleEye = null; window.__lift = 0; if (window.__headRotate) window.__headRotate(0, 0); setEyeOpen(1); }
+      if (st > 0.72) { startled = -1; window.__startleEye = null; window.__lift = 0; hop.rotation.x = 0; if (window.__headRotate) window.__headRotate(0, 0); setEyeOpen(1); }
     }
 
     // 待機 30 秒（任何點擊或拖曳都重新計時）→ 打哈欠 → 睡著
@@ -735,6 +839,27 @@ function tick(){
       }
     }
 
+    // 被子：跟著身體漂浮、慢半拍擺動
+    if (window.__blanket) {
+      window.__blanket.rotation.y = 0.12 * Math.sin(t * 1.15);
+      window.__blanket.rotation.z = -0.10 + 0.055 * Math.sin(t * 1.15 + 1.0);
+    }
+    // ZZZ：睡眠時在頭旁邊往上飄（三顆由小到大）
+    buildZZZ();
+    if ((MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil && parts.head) {
+      const hv = new THREE.Vector3();
+      parts.head.getWorldPosition(hv);
+      hv.y += 0.62; hv.x += 0.30;
+      const pv = hv.project(camera);
+      const bx = (pv.x * 0.5 + 0.5) * innerWidth, by = (-pv.y * 0.5 + 0.5) * innerHeight;
+      zzzEls.forEach((d, i) => {
+        const ph = ((t * 0.55) + i / 3) % 1;
+        const sc = 0.55 + ph * 0.95, op = ph < 0.15 ? ph / 0.15 : (ph > 0.75 ? (1 - ph) / 0.25 : 1);
+        d.style.opacity = String(0.92 * Math.max(0, op));
+        d.style.transform = `translate(${bx + 14 + ph * 26}px, ${by - ph * 92}px) scale(${sc})`;
+      });
+    } else zzzEls.forEach(d => d.style.opacity = '0');
+
     // 汗滴（2D 圖層，跟著頭的位置）
     if (MODE === 'overspend') {
       if (!window.__sweat2d) {
@@ -757,24 +882,28 @@ function tick(){
         d.style.opacity = String(0.9 * (1 - Math.max(0, ((t % 2.6) / 2.6 - 0.75) / 0.25)));
         d.style.transform = `scale(${0.85 + ((t % 2.6) / 2.6) * 0.35})`;
       }
-    } else if (window.__sweat2d) window.__sweat2d.style.opacity = '0';
+    } else {
+      if (window.__sweat2d) window.__sweat2d.style.opacity = '0';
+      if (window.__body && Math.abs(window.__body.scale.y - 1) > 0.001) window.__body.scale.y += (1 - window.__body.scale.y) * Math.min(1, dt * 6);
+    }
 
     // 超支：內疚 / 喪氣（頭低、眼睛半閉、身體微微下沉、緩慢晃）
     if (MODE === 'overspend') {
       if (window.__headRotate) window.__headRotate(0.018 * Math.sin(t * 1.5), 0.27 + 0.022 * Math.sin(t * 2.1));
       window.__lift = -0.022;
+      if (window.__body) window.__body.scale.y = 0.975;   // 垮下去的感覺
       setEyeOpen(0.48 + 0.07 * Math.sin(t * 1.3));
     }
 
     // 打盹：頭緩慢沉下去、快速抬起來（週期 3.6 秒）
     if ((MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil) {
-      const cyc = (t % 4.2) / 4.2;
+      const cyc = (t % 4.0) / 4.0;
       let nod;
-      if (cyc < 0.66) nod = Math.pow(Math.sin(cyc / 0.66 * Math.PI / 2), 1.4);   // 0→1 慢慢沉
-      else if (cyc < 0.72) nod = 1 - (cyc - 0.66) / 0.06;                        // 0.22 秒快速抬
-      else nod = 0;
-      if (window.__headRotate) window.__headRotate(0, 0.07 + 0.30 * nod);
-      window.__lift = -0.020 * nod;   // 打盹時身體跟著微沉
+      if (cyc < 0.60) nod = Math.pow(cyc / 0.60, 0.85);          // 2.4 秒慢慢沉下去
+      else if (cyc < 0.69) { const k = (cyc - 0.60) / 0.09; nod = (1 - k) * (1 + 0.12 * Math.sin(k * Math.PI)); }  // 0.36 秒抬起，帶回彈
+      else nod = 0;                                               // 之後撐著 1.4 秒
+      if (window.__headRotate) window.__headRotate(0, 0.06 + 0.30 * nod);
+      window.__lift = 0;            // 身體完全不動
     }
 
     // 睡回去（snooze 到期）
@@ -871,38 +1000,53 @@ function buildCap() {
   const bb = new THREE.Box3().setFromObject(parts.head);
   const topWorld = new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.max.y, (bb.min.z + bb.max.z) / 2);
   const local = window.__body.worldToLocal(topWorld.clone());
-  const pink  = new THREE.MeshStandardMaterial({ color: 0xffa8cf, roughness: 1.0, flatShading: true });
+  const knitTex = (() => {
+    const cv = document.createElement('canvas'); cv.width = 128; cv.height = 128;
+    const c = cv.getContext('2d');
+    c.fillStyle = '#ffb3d6'; c.fillRect(0, 0, 128, 128);
+    for (let x = 0; x < 128; x += 2) {
+      const l = 78 + Math.random() * 12;
+      c.fillStyle = `hsl(335, 100%, ${l}%)`;
+      c.fillRect(x + Math.random() * 0.8, 0, 1.4, 128);
+    }
+    for (let y = 0; y < 128; y += 6) {
+      c.fillStyle = 'rgba(255,255,255,0.16)';
+      c.fillRect(0, y, 128, 1.2);
+    }
+    const t = new THREE.CanvasTexture(cv);
+    t.wrapS = t.wrapT = THREE.RepeatWrapping; t.repeat.set(5, 2);
+    t.colorSpace = THREE.SRGBColorSpace;
+    return t;
+  })();
+  const pink = new THREE.MeshStandardMaterial({ color: 0xffffff, map: knitTex, roughness: 1.0, flatShading: true });
   const white = new THREE.MeshStandardMaterial({ color: 0xfff8fb, roughness: 1.0, flatShading: true });
 
-  /* ── A：絨毛殼層 + 頂點噪音 ── */
+  /* ── A：絨毛殼層（全部不透明，靠噪音做出毛的剪影） ── */
   const capA = new THREE.Group();
-  const baseGeo = new THREE.ConeGeometry(0.58, 0.66, 34, 18, true);
-  const bodyGeo = noiseDisplace(baseGeo.clone(), 0.030);
-  const coneA = new THREE.Mesh(bodyGeo, pink);
+  const coneA = new THREE.Mesh(noiseDisplace(new THREE.ConeGeometry(0.60, 0.62, 34, 14, true), 0.026), pink);
   coneA.position.y = 0.30;
-  const bandA = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.59, 0.60, 0.15, 34, 5, true), 0.018), pink);
-  bandA.position.y = 0.02;
+  const bandA = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.61, 0.62, 0.16, 34, 3, true), 0.016), pink);
+  bandA.position.y = 0.03;
   capA.add(coneA, bandA);
-  // 不透明絨毛殼層：每層不同噪音位移 → 剪影是一根一根的毛，不用透明（不會有玻璃感）
-  [1.05, 1.10, 1.16, 1.23].forEach((sc, idx) => {
-    const sg = noiseDisplace(new THREE.ConeGeometry(0.58 * sc, 0.66 * sc, 34, 14, true), 0.030 + idx * 0.008);
-    const shell = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({
-      color: idx % 2 ? 0xffc9e2 : 0xffb8d8, roughness: 1, flatShading: true, side: THREE.DoubleSide,
-    }));
+  [1.03, 1.06, 1.10, 1.16].forEach((sc, idx) => {
+    const shell = new THREE.Mesh(
+      noiseDisplace(new THREE.ConeGeometry(0.60 * sc, 0.62 * sc, 34, 14, true), 0.028 + idx * 0.008),
+      new THREE.MeshStandardMaterial({ color: idx % 2 ? 0xffc9e2 : 0xffb8d8, roughness: 1, flatShading: true, side: THREE.DoubleSide }));
     shell.position.y = 0.30;
     capA.add(shell);
-    const bandShell = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.59 * sc, 0.60 * sc, 0.15, 34, 3, true), 0.018 + idx * 0.005),
+    const bs = new THREE.Mesh(
+      noiseDisplace(new THREE.CylinderGeometry(0.61 * sc, 0.62 * sc, 0.16, 34, 3, true), 0.018 + idx * 0.005),
       new THREE.MeshStandardMaterial({ color: idx % 2 ? 0xffc9e2 : 0xffb8d8, roughness: 1, flatShading: true, side: THREE.DoubleSide }));
-    bandShell.position.y = 0.02;
-    capA.add(bandShell);
+    bs.position.y = 0.03;
+    capA.add(bs);
   });
-  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15, 22, 16), 0.024), white);
-  pomA.position.y = 0.68;
+  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.145, 20, 15), 0.022), white);
+  pomA.position.y = 0.66;
   capA.add(pomA);
   [1.10, 1.20].forEach((sc, i2) => {
-    const sh = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15 * sc, 20, 14), 0.020 + i2 * 0.008),
+    const sh = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.145 * sc, 18, 13), 0.020 + i2 * 0.008),
       new THREE.MeshStandardMaterial({ color: i2 ? 0xffffff : 0xfff2f8, roughness: 1, flatShading: true }));
-    sh.position.y = 0.68;
+    sh.position.y = 0.66;
     capA.add(sh);
   });
 
@@ -943,11 +1087,17 @@ function buildCap() {
   cap.add(capA, capC);
   capC.visible = false;
   cap.userData.A = capA; cap.userData.C = capC;
-  cap.position.set(local.x, local.y - 0.05, local.z);
+  cap.position.set(local.x, local.y, local.z);
   cap.rotation.z = 0.14;
-  cap.scale.setScalar(1 / (baseScale || 1));
+  cap.scale.setScalar(0.62 / (baseScale || 1));
   cap.visible = false;
   window.__body.add(cap);
+  // 用實際包圍盒把帽子「放」到頭頂（不靠猜數字）
+  window.__body.updateWorldMatrix(true, true);
+  const hb = new THREE.Box3().setFromObject(parts.head);
+  const cb = new THREE.Box3().setFromObject(cap);
+  cap.position.y += (hb.max.y - cb.min.y) / (baseScale || 1) - 0.03;
+  cap.updateWorldMatrix(true, true);
 }
 
 /* ── 睡眠泡泡 ── */
