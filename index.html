@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v27 · 打盹 · 驚醒 · 慌張</div>
+<div id="hint">v28 · 腮紅校正 · 內疚 · 慢睜眼</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -316,11 +316,16 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
           opacity: 0, toneMapped: false, blending: THREE.NormalBlending
         })
       );
-      const eyeX = (parts.eyeCenterX || 0.19) * 1.02;
-      const rxz = Math.max(0, (parts.headRadius||0.47) ** 2 - eyeX ** 2);
-      const zSurf = hc.z + Math.sqrt(rxz) * 0.90;
-      m.position.set(sx * eyeX, (parts.eyeCenterY || 0) - 0.105, zSurf + 0.055);
-      m.rotation.y = sx * 0.28;
+      // 用眼睛的 body 座標定位（之前混到世界座標 → 腮紅跑到眼睛上方）
+      let ex = sx * 0.28, ey = 0.05, ez = 0.55;
+      if (parts.eyes && parts.eyes[0]) {
+        const w = new THREE.Vector3();
+        parts.eyes[0].getWorldPosition(w);
+        const l = body.worldToLocal(w.clone());
+        ex = Math.abs(l.x) * 1.02; ey = l.y; ez = l.z;
+      }
+      m.position.set(sx * ex * 1.06, ey - 0.072, ez + 0.052);
+      m.rotation.y = sx * 0.26;
       body.add(m);
       (parts.blushList = parts.blushList || []).push(m);
       m.renderOrder = 10;
@@ -541,22 +546,22 @@ function tick(){
       startled += dt;
       const st = startled;
       let lift = 0, back = 0, shake = 0, eyeK = 0;
-      if (st < 0.12) { const k = st / 0.12; lift = 0.075 * k; back = -0.14 * k; eyeK = 1 + 0.30 * k; }
+      if (st < 0.12) { const k = st / 0.12; lift = 0.075 * k; back = -0.14 * k; eyeK = 0.06; }
       else if (st < 0.34) {
         const k = (st - 0.12) / 0.22;
         lift = 0.075 * (1 - k); back = -0.14 * (1 - k * 0.6);
         shake = 0.055 * Math.sin(st * 78) * (1 - k);
-        eyeK = 1.30 - 0.15 * k;
+        eyeK = 0.06 + 0.34 * k;
       } else {
         const k = Math.min((st - 0.34) / 0.21, 1);
         back = -0.056 * (1 - k);
-        eyeK = 1.15 - 0.15 * k;
+        eyeK = 0.40 + 0.60 * k;
       }
       window.__lift = lift;
       hop.rotation.z += shake;
       if (window.__headRotate) window.__headRotate(0, back + 0.05);
-      if (MODE !== 'sleep' && MODE !== 'night') setEyeOpen(eyeK);
-      if (st > 0.55) { startled = -1; window.__lift = 0; if (window.__headRotate) window.__headRotate(0, 0); setEyeOpen(1); }
+      window.__startleEye = eyeK;
+      if (st > 0.72) { startled = -1; window.__startleEye = null; window.__lift = 0; if (window.__headRotate) window.__headRotate(0, 0); setEyeOpen(1); }
     }
 
     // 待機 30 秒（任何點擊或拖曳都重新計時）→ 打哈欠 → 睡著
@@ -706,7 +711,9 @@ function tick(){
       if (FORCE_BLINK) setEyeOpen(0.06);
     } else {
       const sleepingNow = (MODE === 'sleep' || MODE === 'night') && wakeT < 0 && performance.now() > snoozeUntil;
-      if (yawnT >= 0) {
+      if (window.__startleEye != null) {
+        setEyeOpen(window.__startleEye);          // 驚醒：眼睛慢慢睜，不突然張大
+      } else if (yawnT >= 0) {
         setEyeOpen(0.42 + 0.18 * Math.sin(yawnT * 6));
       } else if (sleepingNow) {
         setEyeOpen(0.07);
@@ -728,34 +735,46 @@ function tick(){
       }
     }
 
-    // 汗滴
+    // 汗滴（2D 圖層，跟著頭的位置）
     if (MODE === 'overspend') {
-      buildSweat();
-      if (sweat) {
-        const cyc = (t % 3.2) / 3.2;
-        sweat.visible = true;
-        sweat.position.set(0.30, 0.42 - cyc * 0.34, 0.55);
-        sweat.scale.set(0.8, 1.15 + cyc * 0.5, 0.8);
-        sweat.material.opacity = 0.9 * (1 - Math.max(0, (cyc - 0.75) / 0.25));
+      if (!window.__sweat2d) {
+        const d = document.createElement('div');
+        d.style.cssText = 'position:fixed;width:14px;height:18px;pointer-events:none;z-index:60;'
+          + 'background:linear-gradient(180deg,#bfe6ff,#7fc7ee);border-radius:50% 50% 50% 50%/60% 60% 40% 40%;'
+          + 'clip-path:polygon(50% 0%,85% 45%,85% 70%,50% 100%,15% 70%,15% 45%);opacity:0';
+        document.body.appendChild(d);
+        window.__sweat2d = d;
       }
-    } else if (sweat) sweat.visible = false;
+      const d = window.__sweat2d;
+      const v = new THREE.Vector3();
+      if (parts.head) {
+        const wp = new THREE.Vector3();
+        parts.head.getWorldPosition(wp);
+        wp.x += 0.62; wp.y += 0.30;
+        v.copy(wp).project(camera);
+        d.style.left = ((v.x * 0.5 + 0.5) * innerWidth + 4) + 'px';
+        d.style.top = ((-v.y * 0.5 + 0.5) * innerHeight + (t % 2.6) / 2.6 * 26) + 'px';
+        d.style.opacity = String(0.9 * (1 - Math.max(0, ((t % 2.6) / 2.6 - 0.75) / 0.25)));
+        d.style.transform = `scale(${0.85 + ((t % 2.6) / 2.6) * 0.35})`;
+      }
+    } else if (window.__sweat2d) window.__sweat2d.style.opacity = '0';
 
-    // 超支慌張：頭左右快速小幅擺動 + 身體細抖 + 每 4 秒縮一下
+    // 超支：內疚 / 喪氣（頭低、眼睛半閉、身體微微下沉、緩慢晃）
     if (MODE === 'overspend') {
-      if (window.__headRotate) window.__headRotate(0.075 * Math.sin(t * 15.7), 0.20 + 0.03 * Math.sin(t * 9.4));
-      hop.position.x = 0.008 * Math.sin(t * 31.0);
-      const cyc = (t % 4.0) / 4.0;
-      if (cyc < 0.05) squash = Math.max(squash, 0.07 * Math.sin(cyc / 0.05 * Math.PI));
+      if (window.__headRotate) window.__headRotate(0.018 * Math.sin(t * 1.5), 0.27 + 0.022 * Math.sin(t * 2.1));
+      window.__lift = -0.022;
+      setEyeOpen(0.48 + 0.07 * Math.sin(t * 1.3));
     }
 
     // 打盹：頭緩慢沉下去、快速抬起來（週期 3.6 秒）
     if ((MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil) {
-      const cyc = (t % 3.6) / 3.6;
+      const cyc = (t % 4.2) / 4.2;
       let nod;
       if (cyc < 0.66) nod = Math.pow(Math.sin(cyc / 0.66 * Math.PI / 2), 1.4);   // 0→1 慢慢沉
       else if (cyc < 0.72) nod = 1 - (cyc - 0.66) / 0.06;                        // 0.22 秒快速抬
       else nod = 0;
-      if (window.__headRotate) window.__headRotate(0, 0.10 + 0.085 * nod);
+      if (window.__headRotate) window.__headRotate(0, 0.07 + 0.30 * nod);
+      window.__lift = -0.020 * nod;   // 打盹時身體跟著微沉
     }
 
     // 睡回去（snooze 到期）
@@ -864,26 +883,25 @@ function buildCap() {
   const bandA = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.59, 0.60, 0.15, 34, 5, true), 0.018), pink);
   bandA.position.y = 0.02;
   capA.add(coneA, bandA);
-  const strandTex = makeStrandTex();
-  [1.03, 1.07, 1.11, 1.16].forEach((sc, idx) => {
-    const sg = new THREE.ConeGeometry(0.58 * sc, 0.66 * sc, 34, 12, true);
+  // 不透明絨毛殼層：每層不同噪音位移 → 剪影是一根一根的毛，不用透明（不會有玻璃感）
+  [1.05, 1.10, 1.16, 1.23].forEach((sc, idx) => {
+    const sg = noiseDisplace(new THREE.ConeGeometry(0.58 * sc, 0.66 * sc, 34, 14, true), 0.030 + idx * 0.008);
     const shell = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({
-      color: 0xffc6e0, map: strandTex, transparent: true, opacity: 0.80 - idx * 0.16,
-      roughness: 1, flatShading: true, depthWrite: false, side: THREE.DoubleSide,
+      color: idx % 2 ? 0xffc9e2 : 0xffb8d8, roughness: 1, flatShading: true, side: THREE.DoubleSide,
     }));
     shell.position.y = 0.30;
     capA.add(shell);
-    const bandShell = new THREE.Mesh(new THREE.CylinderGeometry(0.59 * sc, 0.60 * sc, 0.15, 34, 3, true),
-      new THREE.MeshStandardMaterial({ color: 0xffc6e0, map: strandTex, transparent: true, opacity: 0.65 - idx * 0.12, roughness: 1, depthWrite: false, side: THREE.DoubleSide }));
+    const bandShell = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.59 * sc, 0.60 * sc, 0.15, 34, 3, true), 0.018 + idx * 0.005),
+      new THREE.MeshStandardMaterial({ color: idx % 2 ? 0xffc9e2 : 0xffb8d8, roughness: 1, flatShading: true, side: THREE.DoubleSide }));
     bandShell.position.y = 0.02;
     capA.add(bandShell);
   });
-  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15, 22, 16), 0.022), white);
+  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15, 22, 16), 0.024), white);
   pomA.position.y = 0.68;
   capA.add(pomA);
-  [1.07, 1.15].forEach((sc, i2) => {
-    const sh = new THREE.Mesh(new THREE.SphereGeometry(0.15 * sc, 20, 14),
-      new THREE.MeshStandardMaterial({ color: 0xffffff, map: strandTex, transparent: true, opacity: 0.75 - i2 * 0.22, roughness: 1, depthWrite: false }));
+  [1.10, 1.20].forEach((sc, i2) => {
+    const sh = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15 * sc, 20, 14), 0.020 + i2 * 0.008),
+      new THREE.MeshStandardMaterial({ color: i2 ? 0xffffff : 0xfff2f8, roughness: 1, flatShading: true }));
     sh.position.y = 0.68;
     capA.add(sh);
   });
@@ -969,6 +987,8 @@ function popBubble(b) {
   startleWake();
 }
 function startleWake() {
+  wakeT = -1;
+  bubbles.forEach(b => { if (b.userData.alive && b.visible) { b.userData.alive = false; b.userData.popT = 0; } });
   snoozeUntil = performance.now() + 5000;   // 5 秒後再睡回去
   wakeT = 0; startled = 0; idleT = 0;
   expr = 'neutral'; applyExpression(true);
