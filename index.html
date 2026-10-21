@@ -20,12 +20,12 @@
 </script>
 </head>
 <body>
-<div id="hint">v25 · 展示台（待機/睡覺/晚上/超支）</div>
+<div id="hint">v26 · 睡覺泡泡 · 新月 · 毛毛帽</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
-import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+import { mergeVertices, mergeGeometries } from 'three/addons/utils/BufferGeometryUtils.js';
 
 const Q = new URLSearchParams(location.search);
 const FREEZE = Q.has('still'), LIT = Q.has('lit');
@@ -274,41 +274,34 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   });
 
 
-  /* 頭部整體微動：頭、眼睛、嘴巴、腮紅繞脖子同一點旋轉（臉一定跟著頭） */
-  window.__headRotate = function (a) {
+  /* 頭部旋轉：側傾(aZ) + 前後點頭(aX)，眼睛嘴巴腮紅全部跟著同一個脖子點 */
+  window.__headRotate = function (aZ, aX) {
     if (!parts.head) return;
+    aZ = aZ || 0; aX = aX || 0;
     const list = [parts.head, ...(parts.eyes || []), parts.mouth, parts.mouthLine, ...(parts.blushList || [])].filter(Boolean);
     const neckY = (parts.headCenter ? parts.headCenter.y : 0) - (parts.headRadius || 0.49) * 0.72;
-    const c = Math.cos(a), sn = Math.sin(a);
+    const neckZ = parts.headCenter ? parts.headCenter.z : 0;
+    const c1 = Math.cos(aZ), s1 = Math.sin(aZ);
+    const c2 = Math.cos(aX), s2 = Math.sin(aX);
     list.forEach(m => {
-      if (m.userData._bx === undefined) { m.userData._bx = m.position.x; m.userData._by = m.position.y; m.userData._br = m.rotation.z; }
-      const x = m.userData._bx, y = m.userData._by - neckY;
-      m.position.x = x * c - y * sn;
-      m.position.y = neckY + (x * sn + y * c);
-      if (m !== parts.mouth && m !== parts.mouthLine) m.rotation.z = m.userData._br + a;
+      if (m.userData._bx === undefined) {
+        m.userData._bx = m.position.x; m.userData._by = m.position.y; m.userData._bz = m.position.z;
+        m.userData._br = m.rotation.z; m.userData._rx = m.rotation.x;
+      }
+      const x = m.userData._bx;
+      const y = m.userData._by - neckY;
+      const z = m.userData._bz - neckZ;
+      const x1 = x * c1 - y * s1;          // 側傾（繞 Z）
+      const y1 = x * s1 + y * c1;
+      const y2 = y1 * c2 - z * s2;         // 點頭（繞 X）
+      const z2 = y1 * s2 + z * c2;
+      m.position.set(x1, neckY + y2, neckZ + z2);
+      if (m !== parts.mouth && m !== parts.mouthLine) {
+        m.rotation.z = m.userData._br + aZ;
+        m.rotation.x = m.userData._rx + aX;
+      }
     });
   };
-
-  /* 綠色長條（兩側大片的頭髮）：也給根部樞紐，讓它跟粉紅圓球一起甩 */
-  parts.greenHair = [];
-  body.updateMatrixWorld(true);
-  const _cands = [];
-  body.traverse(o => {
-    if (!o.isMesh) return;
-    if (o === parts.head || o.userData.pivot) return;
-    if ((parts.hair || []).includes(o) || (parts.hands || []).includes(o) || o === parts.skirt) return;
-    _cands.push(o);
-  });
-  _cands.forEach(o => {
-    const bb = new THREE.Box3().setFromObject(o);
-    const sz = bb.getSize(new THREE.Vector3());
-    const c0 = bb.getCenter(new THREE.Vector3());
-    if (sz.y > 0.95 && sz.x > 0.50 && sz.x < 0.85 && o.geometry.attributes.position.count < 400) {
-      parts.greenHair.push(o);
-      const inner = c0.x < 0 ? 1 : -1;
-      o.userData.pivot = addPivot(o, c0.x + inner * sz.x * 0.22, c0.y + sz.y * 0.44, inner);
-    }
-  });
 
   /* 腮紅：貼在臉頰，朝外 */
   if (parts.head) {
@@ -382,6 +375,11 @@ function applyExpression(instant){
 /* ── 互動 ───────────────────────────────── */
 const el = renderer.domElement;
 el.addEventListener('pointerdown', e => {
+  if (MODE === 'sleep' || MODE === 'night') {
+    const bub = hitBubble(e.clientX, e.clientY);
+    if (bub) { popBubble(bub); return; }        // 點破泡泡 → 嚇醒
+  }
+  idleT = 0; lastTap = performance.now();
   dragging = true; lastX = e.clientX; lastY = e.clientY; lastMove = performance.now();
   el.setPointerCapture(e.pointerId);
 });
@@ -410,7 +408,7 @@ let waveT = -1, hairSwingT = -1, tapTimes = [], pendingWave = null, pendingJump 
 let earTwitch = [-1, -1], nextTwitch = [5, 7];
 function tap(){
   idleT = 0;
-  if (MODE === 'sleep' || MODE === 'night') { setMode('idle'); return; }
+  if (MODE === 'sleep' || MODE === 'night') { startleWake(); return; }
   // 腮紅立刻回饋（不等判定）
   blushAmt = Math.max(blushAmt, 0.9);
   const now = performance.now();
@@ -507,6 +505,44 @@ function tick(){
       if (hh >= 22 || hh < 6) setMode('night');
     }
 
+    // 睡眠泡泡：每 2 秒一顆，往上飄；點破 → 驚醒
+    const sleepingMode = (MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil;
+    if (!FREEZE) {
+      if (sleepingMode) {
+        if (bubbleT < 0) bubbleT = 1.2;
+        bubbleT += dt;
+        if (bubbleT >= 2.0) { bubbleT = 0; spawnBubble(); }
+      } else { bubbleT = -1; }
+      bubbles.forEach(b => {
+        const u = b.userData;
+        if (!u.alive) {                       // 破掉：放大淡出
+          if (u.popT >= 0) {
+            u.popT += dt;
+            const k = Math.min(u.popT / 0.18, 1);
+            b.scale.setScalar(1 + 0.9 * k);
+            b.material.opacity = 0.42 * (1 - k);
+            if (k >= 1) { b.visible = false; u.popT = -1; }
+          }
+          return;
+        }
+        u.life += dt;
+        const p = u.life / u.dur;
+        if (p >= 1) { b.visible = false; u.alive = false; u.popT = -1; return; }
+        b.position.y += dt * 0.26;
+        b.position.x += dt * 0.015;
+        b.scale.setScalar(1 + 0.35 * p);
+        b.material.opacity = 0.42 * (1 - Math.max(0, (p - 0.72) / 0.28));
+      });
+    }
+
+    // 驚醒抖一下
+    if (startled >= 0) {
+      startled += dt;
+      const k = Math.max(0, 1 - startled / 0.45);
+      hop.rotation.z += 0.05 * Math.sin(startled * 55) * k;
+      if (startled > 0.5) startled = -1;
+    }
+
     // 待機 30 秒（任何點擊或拖曳都重新計時）→ 打哈欠 → 睡著
     if (!FREEZE) {
       const busy = dragging || (performance.now() - lastTap < 900) || (performance.now() - lastMove < 900);
@@ -572,6 +608,7 @@ function tick(){
       const DUR = 1.9;
       const p = Math.min(waveT / DUR, 1);
       if (expr !== 'smile') { expr = 'smile'; applyExpression(true); }   // 揮手期間一定是笑臉
+      blushAmt = Math.max(blushAmt, 0.9 * Math.min(p / 0.15, 1));        // 揮手也有腮紅
       const ss = x => x * x * (3 - 2 * x);
       const env2 = ss(Math.min(p / 0.2, 1)) * ss(Math.min((1 - p) / 0.2, 1));
       const WLIFT = Q.has('wlift') ? parseFloat(Q.get('wlift')) : 0.030;
@@ -635,7 +672,7 @@ function tick(){
     if (FREEZE) {
       if (FORCE_BLINK) setEyeOpen(0.06);
     } else {
-      const sleepingNow = (MODE === 'sleep' || MODE === 'night') && wakeT < 0;
+      const sleepingNow = (MODE === 'sleep' || MODE === 'night') && wakeT < 0 && performance.now() > snoozeUntil;
       if (yawnT >= 0) {
         setEyeOpen(0.42 + 0.18 * Math.sin(yawnT * 6));
       } else if (sleepingNow) {
@@ -656,6 +693,11 @@ function tick(){
         if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
       }
       }
+    }
+
+    // 睡回去（snooze 到期）
+    if ((MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil && expr === 'neutral' && wakeT < 0) {
+      enterSleep();
     }
 
     // 4 秒沒互動 → 表情自動回到笑臉
@@ -679,17 +721,26 @@ const BG_OVER  = 'linear-gradient(180deg,#dfe3ee 0%,#e8dbe4 60%,#efd6dc 100%)';
 function buildSky() {
   if (sky) return;
   sky = new THREE.Group();
-  const cv = document.createElement('canvas'); cv.width = cv.height = 128;
+  const cv = document.createElement('canvas'); cv.width = cv.height = 160;
   const c = cv.getContext('2d');
-  const g = c.createRadialGradient(64, 64, 8, 64, 64, 62);
-  g.addColorStop(0, 'rgba(255,252,224,1)');
-  g.addColorStop(0.55, 'rgba(255,240,185,0.95)');
-  g.addColorStop(1, 'rgba(255,235,160,0)');
-  c.fillStyle = g; c.fillRect(0, 0, 128, 128);
+  // 柔光
+  const glow = c.createRadialGradient(80, 80, 26, 80, 80, 78);
+  glow.addColorStop(0, 'rgba(255,244,190,0.85)');
+  glow.addColorStop(1, 'rgba(255,240,170,0)');
+  c.fillStyle = glow; c.fillRect(0, 0, 160, 160);
+  // 新月本體
+  const body = c.createRadialGradient(64, 66, 6, 80, 80, 46);
+  body.addColorStop(0, '#fffdf0');
+  body.addColorStop(1, '#ffe9a6');
+  c.beginPath(); c.arc(80, 80, 44, 0, Math.PI * 2); c.fillStyle = body; c.fill();
+  // 挖掉左上方 → 開口朝左上
+  c.globalCompositeOperation = 'destination-out';
+  c.beginPath(); c.arc(58, 58, 40, 0, Math.PI * 2); c.fill();
+  c.globalCompositeOperation = 'source-over';
   const tex = new THREE.CanvasTexture(cv); tex.colorSpace = THREE.SRGBColorSpace;
-  const moon = new THREE.Mesh(new THREE.PlaneGeometry(1.5, 1.5),
+  const moon = new THREE.Mesh(new THREE.PlaneGeometry(1.7, 1.7),
     new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthWrite: false, toneMapped: false }));
-  moon.position.set(-2.05, 1.55, -3.2);
+  moon.position.set(-1.65, 1.45, -3.2);
   sky.add(moon);
   for (let i = 0; i < 26; i++) {
     const r = 0.035 + Math.random() * 0.055;
@@ -708,33 +759,108 @@ function buildCap() {
   const bb = new THREE.Box3().setFromObject(parts.head);
   const topWorld = new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.max.y, (bb.min.z + bb.max.z) / 2);
   const local = window.__body.worldToLocal(topWorld.clone());
-  const pink  = new THREE.MeshStandardMaterial({ color: 0xff9ecb, roughness: 0.8, flatShading: true, emissive: 0x442233, emissiveIntensity: 0.06 });
-  const white = new THREE.MeshStandardMaterial({ color: 0xffffff, roughness: 0.95, flatShading: true });
+  const pink  = new THREE.MeshStandardMaterial({ color: 0xff9ecb, roughness: 1.0, flatShading: true });
+  const fluff = new THREE.MeshStandardMaterial({ color: 0xffb3d6, roughness: 1.0, flatShading: true });
+  const white = new THREE.MeshStandardMaterial({ color: 0xfff6fa, roughness: 1.0, flatShading: true });
   cap = new THREE.Group();
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.66, 12, 1), pink);
+  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.66, 14, 1), pink);
   cone.position.y = 0.30;
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 12, 1, true), pink);
+  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 14, 1, true), pink);
   band.position.y = 0.02;
-  const pom = new THREE.Mesh(new THREE.SphereGeometry(0.11, 10, 8), white);
+  const pom = new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 9), white);
   pom.position.y = 0.66;
   cap.add(cone, band, pom);
-  cap.position.set(local.x, local.y + 0.02, local.z);
+
+  // 絨毛：帽身外層撒小球（合併成一個幾何，效能影響很小）
+  const pieces = [];
+  const pomG = [];
+  for (let i = 0; i < 240; i++) {
+    const ang = Math.random() * Math.PI * 2;
+    const hh = Math.pow(Math.random(), 0.75);          // 底部密一點
+    const rr = 0.455 * (1 - hh) + 0.015;
+    const sc = 0.011 + Math.random() * 0.010;
+    const g = new THREE.SphereGeometry(sc, 6, 5);
+    g.translate(Math.cos(ang) * rr, 0.02 + hh * 0.60, Math.sin(ang) * rr);
+    pieces.push(g);
+  }
+  for (let i = 0; i < 26; i++) {                        // 帽沿一圈
+    const ang = i / 26 * Math.PI * 2;
+    const g = new THREE.SphereGeometry(0.032, 6, 5);
+    g.translate(Math.cos(ang) * 0.47, 0.0, Math.sin(ang) * 0.47);
+    pieces.push(g);
+  }
+  for (let i = 0; i < 34; i++) {                        // 毛球表面（白色絨毛）
+    const ang = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
+    const rr = 0.112;
+    const g = new THREE.SphereGeometry(0.013 + Math.random() * 0.008, 6, 5);
+    g.translate(Math.cos(ang) * Math.sin(ph) * rr, 0.66 + Math.cos(ph) * rr, Math.sin(ang) * Math.sin(ph) * rr);
+    pomG.push(g);
+  }
+  const merged = mergeGeometries(pieces, false);
+  if (merged) cap.add(new THREE.Mesh(merged, fluff));
+  const mergedPom = mergeGeometries(pomG, false);
+  if (mergedPom) cap.add(new THREE.Mesh(mergedPom, white));
+
+  cap.position.set(local.x, local.y - 0.05, local.z);
   cap.rotation.z = 0.14;
   cap.scale.setScalar(1 / (baseScale || 1));
   cap.visible = false;
   window.__body.add(cap);
 }
 
+/* ── 睡眠泡泡 ── */
+const bubbles = [];
+let bubbleT = -1, snoozeUntil = 0, startled = -1;
+function spawnBubble() {
+  if (!window.__body) return;
+  const r = 0.085 + Math.random() * 0.03;
+  const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, depthWrite: false });
+  const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), mat);
+  m.position.set(0.25 + Math.random() * 0.06, 0.10, 0.58);
+  m.userData = { life: 0, dur: 2.6, alive: true, popT: -1 };
+  const hi = new THREE.Mesh(new THREE.SphereGeometry(r * 0.28, 8, 6),
+    new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false }));
+  hi.position.set(-r * 0.35, r * 0.4, r * 0.55);
+  m.add(hi);
+  window.__body.add(m);
+  bubbles.push(m);
+  if (bubbles.length > 8) { const old = bubbles.shift(); old.parent && old.parent.remove(old); }
+}
+const _ray = new THREE.Raycaster();
+function hitBubble(cx, cy) {
+  const rect = renderer.domElement.getBoundingClientRect();
+  const ndc = new THREE.Vector2(((cx - rect.left) / rect.width) * 2 - 1, -((cy - rect.top) / rect.height) * 2 + 1);
+  _ray.setFromCamera(ndc, camera);
+  const live = bubbles.filter(b => b.userData.alive && b.visible);
+  if (!live.length) return null;
+  const hits = _ray.intersectObjects(live, true);
+  if (!hits.length) return null;
+  let o = hits[0].object;
+  while (o && !live.includes(o)) o = o.parent;
+  return o || null;
+}
+function popBubble(b) {
+  b.userData.alive = false;
+  b.userData.popT = 0;
+  startleWake();
+}
+function startleWake() {
+  snoozeUntil = performance.now() + 5000;   // 5 秒後再睡回去
+  wakeT = 0; startled = 0; idleT = 0;
+  expr = 'neutral'; applyExpression(true);
+  if (window.__headRotate) window.__headRotate(0, 0);
+}
+
 function enterSleep() {
   MODE = (NIGHT ? 'night' : 'sleep');
-  wakeT = -1;
-  expr = 'smile'; applyExpression(true);
-  if (window.__headRotate) window.__headRotate(-0.05);
+  wakeT = -1; snoozeUntil = 0; startled = -1;
+  expr = 'neutral'; applyExpression(true);       // 睡覺嘴巴 = 普通（橫線）
+  if (window.__headRotate) window.__headRotate(0, 0.16);   // 頭往前打盹
 }
 function enterWake() {
   MODE = 'idle';
-  wakeT = 0; idleT = 0; yawnT = -1;
-  if (window.__headRotate) window.__headRotate(0);
+  wakeT = 0; idleT = 0; yawnT = -1; snoozeUntil = 0; startled = -1;
+  if (window.__headRotate) window.__headRotate(0, 0);
   expr = 'smile'; applyExpression(true);
 }
 function setMode(m) {
@@ -747,7 +873,7 @@ function setMode(m) {
     enterSleep();
   } else if (m === 'sleep') {
     NIGHT = false;
-    document.body.style.background = BG_DAY;
+    document.body.style.background = BG_DAY;   // 睡覺不改背景
     if (sky) sky.visible = false;
     if (cap) cap.visible = false;
     enterSleep();
@@ -758,7 +884,7 @@ function setMode(m) {
     if (sky) sky.visible = false;
     if (cap) cap.visible = false;
     idleT = 0; wakeT = 0; setEyeOpen(1);
-    if (window.__headRotate) window.__headRotate(-0.07);
+    if (window.__headRotate) window.__headRotate(0, 0.20);   // 超支：頭往前低
     expr = 'sad'; applyExpression(true);
   } else {   // idle / wake
     MODE = 'idle'; NIGHT = false;
