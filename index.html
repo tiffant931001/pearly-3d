@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v30 · 圓頂毛帽 · 腮紅貼臉 · ZZZ</div>
+<div id="hint">v31 · 帽子貼頭 · 腮紅柔邊</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -194,6 +194,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   hop.add(body);
   window.__body = body;
   window.__hop = hop;
+  window.__THREE = THREE;
   window.__YB = new THREE.Box3().setFromObject(body).min.y / baseScale;   // 腳底（body 座標）
 
   /* 普通表情用的短橫線嘴巴（顏色沿用嘴巴本身的粉紅） */
@@ -279,7 +280,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   window.__headRotate = function (aZ, aX) {
     if (!parts.head) return;
     aZ = aZ || 0; aX = aX || 0;
-    const list = [parts.head, ...(parts.eyes || []), parts.mouth, parts.mouthLine, ...(parts.blushList || []), window.__cap].filter(Boolean);
+    const list = [parts.head, ...(parts.eyes || []), parts.mouth, parts.mouthLine, ...(parts.blushList || [])].filter(Boolean);
     const neckY = (parts.headCenter ? parts.headCenter.y : 0) - (parts.headRadius || 0.49) * 0.72;
     const neckZ = parts.headCenter ? parts.headCenter.z : 0;
     const c1 = Math.cos(aZ), s1 = Math.sin(aZ);
@@ -330,12 +331,22 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
         // 用射線打真正的臉（低多邊形不是正球，用球面近似會有一邊埋進臉裡）
         const rc = new THREE.Raycaster(new THREE.Vector3(wx, wy, hc.z + 2.0), new THREE.Vector3(0, 0, -1));
         const hits = rc.intersectObject(parts.head, true);
-        const wz = hits.length ? hits[0].point.z + 0.012 : hc.z + R + 0.03;
-        const lp = body.worldToLocal(new THREE.Vector3(wx, wy, wz));
-        px = lp.x; py = lp.y; pz = lp.z;
+        if (hits.length) {
+          const hp = hits[0].point.clone();
+          const nn = hits[0].face ? hits[0].face.normal.clone().transformDirection(parts.head.matrixWorld).normalize() : new THREE.Vector3(0, 0, 1);
+          const wp = hp.clone().add(nn.clone().multiplyScalar(0.012));
+          const lp = body.worldToLocal(wp.clone());
+          const lp2 = body.worldToLocal(hp.clone().add(nn.clone().multiplyScalar(0.10)));
+          px = lp.x; py = lp.y; pz = lp.z;
+          m.userData.fn = lp2.sub(lp).normalize();     // 臉的法線（body 座標）
+        } else {
+          const lp = body.worldToLocal(new THREE.Vector3(wx, wy, hc.z + R + 0.03));
+          px = lp.x; py = lp.y; pz = lp.z;
+        }
       }
       m.position.set(px, py, pz);
-      m.rotation.y = sx * 0.26;
+      if (m.userData.fn) m.lookAt(px + m.userData.fn.x, py + m.userData.fn.y, pz + m.userData.fn.z);
+      else m.rotation.y = sx * 0.26;
       body.add(m);
       (parts.blushList = parts.blushList || []).push(m);
       m.renderOrder = -1;   // 畫在眼睛後面
@@ -1079,15 +1090,18 @@ function buildCap() {
   cap.rotation.z = 0.14;
   cap.scale.setScalar(0.62 / (baseScale || 1));
   cap.visible = false;
-  window.__body.add(cap);
-  // 用實際包圍盒把帽子「放」到頭頂（不靠猜數字）
+  // 直接掛在「頭」底下：頭轉到哪帽子就跟到哪，不可能漂浮
   window.__body.updateWorldMatrix(true, true);
+  parts.head.updateWorldMatrix(true, true);
   const hb = new THREE.Box3().setFromObject(parts.head);
-  const cb = new THREE.Box3().setFromObject(cap);
-  cap.position.y += (hb.max.y - cb.min.y) / (baseScale || 1) - 0.03;
-  cap.updateWorldMatrix(true, true);
-  cap.userData._bx = cap.position.x; cap.userData._by = cap.position.y; cap.userData._bz = cap.position.z;
-  cap.userData._br = cap.rotation.z; cap.userData._rx = cap.rotation.x;
+  const topW = new THREE.Vector3((hb.min.x + hb.max.x) / 2, hb.max.y, (hb.min.z + hb.max.z) / 2);
+  const topL = parts.head.worldToLocal(topW.clone());   // 頭頂在「頭」的座標系
+  cap.position.set(topL.x, topL.y + 0.01, topL.z);
+  cap.rotation.z = 0.14;
+  // 帽子尺寸要換算成頭的座標系
+  const headScaleW = new THREE.Vector3(); parts.head.getWorldScale(headScaleW);
+  cap.scale.setScalar(0.62 / (baseScale || 1) * (baseScale / (headScaleW.x || 1)));
+  parts.head.add(cap);
   window.__cap = cap;
 }
 
