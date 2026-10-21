@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v35 · 平順帽子 · 打盹側沉</div>
+<div id="hint">v36 · 耳朵跟頭 · 抓癢降低</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -313,6 +313,20 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
       m.rotation.x = m.userData._rx + aX;
       m.rotation.y = (m.userData._ry || 0) + aY;
     });
+    // 耳朵根部也一起繞脖子（不然頭的動作會跟耳朵分離）
+    (parts.hair || []).forEach(h => {
+      const g = h.userData && h.userData.pivot;
+      if (!g) return;
+      if (g.userData._bx === undefined) {
+        g.userData._bx = g.position.x; g.userData._by = g.position.y; g.userData._bz = g.position.z;
+      }
+      const x = g.userData._bx, y = g.userData._by - neckY, z = g.userData._bz - neckZ;
+      const x1 = x * c1 - y * s1, y1 = x * s1 + y * c1;
+      const y2 = y1 * c2 - z * s2, z2 = y1 * s2 + z * c2;
+      const c3 = Math.cos(aY), s3 = Math.sin(aY);
+      g.position.set(x1 * c3 + z2 * s3, neckY + y2, -x1 * s3 + z2 * c3);
+    });
+    window.__earFollow = { z: aZ, x: aX, y: aY };
   };
 
   /* 腮紅：貼在臉頰，朝外 */
@@ -749,9 +763,9 @@ function tick(){
           if (g) {
             if (g.userData.baseY === undefined) { g.userData.baseY = g.position.y; g.userData.baseX = g.position.x; }
             const shake = Math.sin(fidgetT * 16) * 0.05 * env;
-            g.rotation.z = (-0.58 * env + shake) * -g.userData.innerSign;
+            g.rotation.z = (-0.50 * env + shake) * -g.userData.innerSign;
             g.rotation.x = -0.06 * env;
-            g.position.y = g.userData.baseY + 0.105 * env;
+            g.position.y = g.userData.baseY + 0.085 * env;
           }
           if (p >= 1) {
             fidgetT = -1;
@@ -802,7 +816,10 @@ function tick(){
         const g = h.userData.pivot;
         if (!g) return;
         // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
-        g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0) + lagSw) * g.userData.innerSign;
+        const ef = window.__earFollow || { z: 0, x: 0, y: 0 };
+        g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0) + lagSw) * g.userData.innerSign + ef.z;
+        g.rotation.x = ef.x;
+        g.rotation.y = ef.y;
       });
       // 綠色長條：慢半拍、幅度一半
       (parts.greenHair || []).forEach((e, i) => {
