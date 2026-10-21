@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v23 · 點一下跳 · 兩下揮手 · 三下晃耳朵</div>
+<div id="hint">v24 · 點一下跳 · 兩下揮手 · 三下晃耳朵</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -248,7 +248,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
     if (sz.x > 0.50 && sz.y > 0.60 && c0.y > 0.05) {
       parts.hair.push(o);
       const inner = c0.x < 0 ? 1 : -1;
-      o.userData.pivot = addPivot(o, c0.x + inner*sz.x*0.20, c0.y + sz.y*0.40, inner);
+      o.userData.pivot = addPivot(o, c0.x + inner*sz.x*0.28, c0.y - sz.y*0.28, inner);
     } else if (Math.abs(c0.x) > 0.18 && Math.abs(c0.x) < 0.36 && c0.y < -0.28 && sz.x < 0.45) {
       parts.hands.push(o);
       o.userData.innerSign = c0.x < 0 ? 1 : -1;
@@ -343,6 +343,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   if (Q.has('pitch')) { pitch = parseFloat(Q.get('pitch')); }
   if (Q.has('expr'))  { expr = Q.get('expr'); applyExpression(true); }
   loaded = true;
+  applyExpression(true);
   lastTap = performance.now();
   window.__ready = true;
   if (Q.has('auto')) { setTimeout(() => tap(), 550); }
@@ -355,6 +356,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
 /* ── 表情 ───────────────────────────────── */
 const EXPRS = ['smile', 'neutral', 'sad'];
+window.__jumpY = () => jumpY;
 window.__exprGet = () => ({ expr, waveT, tapTimes: tapTimes.length, pending: pendingWave !== null });
 function setEyeOpen(v){ parts.eyes.forEach(e => { e.scale.y = v; }); }
 function applyExpression(instant){
@@ -363,8 +365,8 @@ function applyExpression(instant){
   const line = parts.mouthLine;
   m.rotation.z = 0; m.scale.set(1, 1, 1);
   if (line) line.visible = false;
-  if (expr === 'smile')      { m.visible = true;  m.rotation.z = 0;       }
-  if (expr === 'sad')        { m.visible = true;  m.rotation.z = Math.PI; }
+  if (expr === 'smile')      { m.visible = true;  m.rotation.z = Math.PI; }   // ∨ = 開心
+  if (expr === 'sad')        { m.visible = true;  m.rotation.z = 0;       }   // ^ = 不開心
   if (expr === 'neutral')    {
     m.visible = false;
     if (line) line.visible = true;
@@ -399,40 +401,42 @@ el.addEventListener('pointerup', e => {
 });
 
 let tapCount = 0, lastTap = -1e9;
-let waveT = -1, hairSwingT = -1, tapTimes = [], pendingWave = null;
+let waveT = -1, hairSwingT = -1, tapTimes = [], pendingWave = null, pendingJump = null;
 let earTwitch = [-1, -1], nextTwitch = [5, 7];
 function tap(){
-  // 1) 跳一下：只有站在地面時才給向上的速度（避免連點越跳越高）
-  if (jumpY <= 0.001) {
-    squash = -0.30;       // 只壓一下，0.2 秒內回正
-    jumpV = 3.1;
-  }
-  // 2) 腮紅閃一下
+  // 腮紅立刻回饋（不等判定）
   blushAmt = Math.max(blushAmt, 0.9);
-  lastTap = performance.now();
-  // 3) 連點判定：點兩下＝揮手、點三下＝頭髮大晃動
   const now = performance.now();
   tapTimes = tapTimes.filter(x => now - x < 700);
   tapTimes.push(now);
-  if (tapTimes.length >= 3) {
-    clearTimeout(pendingWave);
-    hairSwingT = 0;
-    tapTimes = [];
-  } else if (tapTimes.length === 2) {
+  const n = tapTimes.length;
+
+  if (n === 1) {
+    // 點一下 → 等 230ms 確認不是連點才跳（連點時整隻不動，頭才不會晃）
+    clearTimeout(pendingJump);
+    pendingJump = setTimeout(() => {
+      if (tapTimes.length === 1) {
+        if (jumpY <= 0.001) { squash = -0.30; jumpV = 3.1; }
+        tapCount++;
+        if (tapCount > 1) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
+        applyExpression();
+      }
+    }, 230);
+  } else if (n === 2) {
+    clearTimeout(pendingJump);
     clearTimeout(pendingWave);
     pendingWave = setTimeout(() => {
       pendingWave = null;
-      if (tapTimes.length === 2) { waveT = 0; expr = 'smile'; applyExpression(true); }   // 揮手一定是笑臉
-    }, 280);
+      if (tapTimes.length === 2) { waveT = 0; expr = 'smile'; applyExpression(true); }   // 揮手一定笑臉
+    }, 240);
+  } else {
+    clearTimeout(pendingJump);
+    clearTimeout(pendingWave);
+    pendingWave = null;
+    hairSwingT = 0;      // 晃耳朵（不跳，頭不動）
+    tapTimes = [];
   }
   lastTap = now;
-
-  // 4) 換表情（揮手期間不改表情，維持笑臉）
-  tapCount++;
-  const waving = waveT >= 0 || pendingWave !== null || (tapTimes.length === 2);
-  if (tapCount > 1 && !waving) expr = EXPRS[(EXPRS.indexOf(expr) + 1) % EXPRS.length];
-  if (!waving) applyExpression();
-  else { expr = 'smile'; applyExpression(true); }
 }
 
 let _rzTimer = null;
@@ -501,7 +505,7 @@ function tick(){
       if (SWINGAT !== null) { hairSwingT = SWINGAT; }
       if (hairSwingT >= 0) {
         hairSwingT += dt;
-        const DUR = 0.42, CYCLES = 2.5, AMP = 0.115;   // ±6.6°、0.42 秒抖 2.5 下
+        const DUR = 0.62, CYCLES = 2.0, AMP = 0.157;   // ±9°、0.62 秒抖 2 下
         const p = hairSwingT / DUR;
         if (p >= 1) { hairSwingT = -1; }
         else { sw0 = sw1 = AMP * Math.sin(p * Math.PI * 2 * CYCLES) * Math.pow(1 - p, 1.5); }
@@ -518,8 +522,8 @@ function tick(){
         if (!g) return;
         let sw = 0;
         if (hairSwingT >= 0) {
-          const p2 = (hairSwingT - 0.08) / 0.42;
-          if (p2 > 0 && p2 < 1) sw = 0.058 * Math.sin(p2 * Math.PI * 2 * 2.5) * Math.pow(1 - p2, 1.5);
+          const p2 = (hairSwingT - 0.10) / 0.62;
+          if (p2 > 0 && p2 < 1) sw = 0.078 * Math.sin(p2 * Math.PI * 2 * 2.0) * Math.pow(1 - p2, 1.5);
         }
         g.rotation.z = (0.007 * Math.sin(ph0 * 0.85 + i * 1.2) + sw) * g.userData.innerSign;
       });
@@ -611,7 +615,6 @@ function tick(){
     blush.forEach(b => { b.material.opacity = Math.max(0, blushAmt) * 0.85; });
   }
 
-  if (window.__headRotate) window.__headRotate(0);   // 頭微微動 ±0.9°（臉與嘴巴同步）
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(tick);
