@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v33 · 打盹 · 想睡 · 小動作</div>
+<div id="hint">v34 · 待機動作拆成按鈕</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -1271,7 +1271,7 @@ window.__fidget = k => { fidgetKind = k || 'scratch'; fidgetT = 0; };
   const mk = (label, fn) => {
     const b = document.createElement('button');
     b.textContent = label;
-    b.style.cssText = 'flex:0 0 auto;padding:7px 11px;border-radius:11px;border:none;background:#ffd9ea;color:#8a3a63;font-size:13px;font-weight:700;font-family:inherit;box-shadow:0 2px 0 rgba(180,90,130,.25)';
+    b.style.cssText = 'flex:0 0 auto;padding:6px 9px;border-radius:10px;border:none;background:#ffd9ea;color:#8a3a63;font-size:12px;font-weight:700;font-family:inherit;box-shadow:0 2px 0 rgba(180,90,130,.25)';
     b.onclick = ev => { ev.stopPropagation(); fn(); };
     bar.appendChild(b);
   };
@@ -1285,10 +1285,17 @@ window.__fidget = k => { fidgetKind = k || 'scratch'; fidgetT = 0; };
   mk('跳', () => { if (jumpPhase === 'idle' && jumpY <= 0.001) { jumpPhase = 'crouch'; crouchT = 0; } });
   mk('帽子A', () => { setMode('night'); setHat('A'); });
   mk('帽子C', () => { setMode('night'); setHat('C'); });
+  // 待機動作拆開：一個一個看
+  mk('歪頭', () => { setMode('idle'); fidgetKind = 'tilt'; fidgetT = 0; });
+  mk('抓癢', () => { setMode('idle'); fidgetKind = 'scratch'; fidgetT = 0; });
+  mk('眼皮重', () => { setMode('idle'); idleT = 26; });
+  mk('哈欠', () => { setMode('idle'); idleT = 30.2; yawnT = 0; });
+  mk('垂頭', () => { setMode('idle'); idleT = 33.05; });
+  mk('撐起來', () => { setMode('idle'); idleT = 36.05; });
   document.body.appendChild(bar);
   // 把原本的說明文字往上移
   const hint = document.querySelector('.hint, #hint');
-  if (hint) hint.style.bottom = '108px';
+  if (hint) hint.style.bottom = '20px';
 })();
 
 renderer.setAnimationLoop(tick);
