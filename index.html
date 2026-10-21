@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v22 · 點一下跳 · 兩下揮手 · 三下頭髮甩</div>
+<div id="hint">v23 · 點一下跳 · 兩下揮手 · 三下晃耳朵</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -355,6 +355,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
 
 /* ── 表情 ───────────────────────────────── */
 const EXPRS = ['smile', 'neutral', 'sad'];
+window.__exprGet = () => ({ expr, waveT, tapTimes: tapTimes.length, pending: pendingWave !== null });
 function setEyeOpen(v){ parts.eyes.forEach(e => { e.scale.y = v; }); }
 function applyExpression(instant){
   const m = parts.mouth;
@@ -420,6 +421,7 @@ function tap(){
   } else if (tapTimes.length === 2) {
     clearTimeout(pendingWave);
     pendingWave = setTimeout(() => {
+      pendingWave = null;
       if (tapTimes.length === 2) { waveT = 0; expr = 'smile'; applyExpression(true); }   // 揮手一定是笑臉
     }, 280);
   }
@@ -494,25 +496,15 @@ function tick(){
       if (window.__body) {
         window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
       }
-      // 點三下的頭髮大晃動（0.95 秒，帶彈性，兩邊錯開）
+      // 點三下：晃晃耳朵（小而快、兩邊同步、2.5 下）
       let sw0 = 0, sw1 = 0;
       if (SWINGAT !== null) { hairSwingT = SWINGAT; }
       if (hairSwingT >= 0) {
         hairSwingT += dt;
-        const DUR = 1.0, p = hairSwingT / DUR;
+        const DUR = 0.42, CYCLES = 2.5, AMP = 0.115;   // ±6.6°、0.42 秒抖 2.5 下
+        const p = hairSwingT / DUR;
         if (p >= 1) { hairSwingT = -1; }
-        else {
-          // 照箭頭：先往外上甩（0→25%），再往下回落（25→70%），最後微彈
-          const out = Math.sin(Math.min(p / 0.30, 1) * Math.PI / 2);
-          const back = p < 0.30 ? 0 : Math.pow(1 - Math.min((p - 0.30) / 0.62, 1), 1.6);
-          const base = 0.085 * out * (p < 0.30 ? 1 : back);
-          const bounce = p > 0.55 ? 0.018 * Math.sin((p - 0.55) * Math.PI * 5) * Math.pow(1 - p, 2) : 0;
-          sw0 = base + bounce;
-          const p2 = p - 0.06;
-          const out2 = p2 <= 0 ? 0 : Math.sin(Math.min(p2 / 0.30, 1) * Math.PI / 2);
-          const back2 = p2 < 0.30 ? 1 : Math.pow(1 - Math.min((p2 - 0.30) / 0.62, 1), 1.6);
-          sw1 = 0.078 * out2 * back2 + (p2 > 0.55 ? 0.016 * Math.sin((p2 - 0.55) * Math.PI * 5) * Math.pow(1 - p2, 2) : 0);
-        }
+        else { sw0 = sw1 = AMP * Math.sin(p * Math.PI * 2 * CYCLES) * Math.pow(1 - p, 1.5); }
       }
       parts.hair.forEach((h, i) => {
         const g = h.userData.pivot;
@@ -520,16 +512,14 @@ function tick(){
         // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
         g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
       });
-      // 綠色長條：有重量的甩動（慢 0.08 秒、幅度比粉紅球小一點）
+      // 綠色長條：慢半拍、幅度一半
       (parts.greenHair || []).forEach((e, i) => {
         const g = e.userData.pivot;
         if (!g) return;
         let sw = 0;
         if (hairSwingT >= 0) {
-          const p = Math.min(Math.max(hairSwingT - 0.08, 0) / 1.0, 1);
-          const out = Math.sin(Math.min(p / 0.32, 1) * Math.PI / 2);
-          const back = p < 0.32 ? 1 : Math.pow(1 - Math.min((p - 0.32) / 0.62, 1), 1.6);
-          sw = 0.070 * out * back;
+          const p2 = (hairSwingT - 0.08) / 0.42;
+          if (p2 > 0 && p2 < 1) sw = 0.058 * Math.sin(p2 * Math.PI * 2 * 2.5) * Math.pow(1 - p2, 1.5);
         }
         g.rotation.z = (0.007 * Math.sin(ph0 * 0.85 + i * 1.2) + sw) * g.userData.innerSign;
       });
@@ -621,7 +611,7 @@ function tick(){
     blush.forEach(b => { b.material.opacity = Math.max(0, blushAmt) * 0.85; });
   }
 
-  if (window.__headRotate) window.__headRotate(0.016 * Math.sin(performance.now() * 0.00045 + 0.6));   // 頭微微動 ±0.9°（臉與嘴巴同步）
+  if (window.__headRotate) window.__headRotate(0);   // 頭微微動 ±0.9°（臉與嘴巴同步）
   renderer.render(scene, camera);
 }
 renderer.setAnimationLoop(tick);
