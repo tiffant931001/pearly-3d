@@ -20,7 +20,7 @@
 </script>
 </head>
 <body>
-<div id="hint">v26 · 睡覺泡泡 · 新月 · 毛毛帽</div>
+<div id="hint">v27 · 打盹 · 驚醒 · 慌張</div>
 <script>window.onerror=(m,src,l,c)=>{document.title='ERR '+m+' @'+l+':'+c;};</script>
 <script type="module">
 import * as THREE from 'three';
@@ -80,7 +80,7 @@ let expr = EXPR || 'smile';
 /* ── 模式與待機狀態 ── */
 let MODE = 'idle';           // idle | sleep | night | overspend
 let idleT = 0, yawnT = -1, wakeT = -1;
-let jumpPhase = 'idle', crouchT = 0;
+let jumpPhase = 'idle', crouchT = 0, hairLagT = -1, hairLagAmp = 0.06;
 let blinkT = -1, nextBlink = 3.0;
 let blushAmt = 0, blushTarget = 0;
 let squash = 0, squashV = 0, jumpY = 0, jumpV = 0;
@@ -194,6 +194,7 @@ new GLTFLoader().load('./model/character.glb', (gltf) => {
   hop.add(body);
   window.__body = body;
   window.__hop = hop;
+  window.__YB = new THREE.Box3().setFromObject(body).min.y / baseScale;   // 腳底（body 座標）
 
   /* 普通表情用的短橫線嘴巴（顏色沿用嘴巴本身的粉紅） */
   if (parts.mouth) {
@@ -528,19 +529,34 @@ function tick(){
         u.life += dt;
         const p = u.life / u.dur;
         if (p >= 1) { b.visible = false; u.alive = false; u.popT = -1; return; }
-        b.position.y += dt * 0.26;
+        b.position.y += dt * 0.30;
         b.position.x += dt * 0.015;
         b.scale.setScalar(1 + 0.35 * p);
         b.material.opacity = 0.42 * (1 - Math.max(0, (p - 0.72) / 0.28));
       });
     }
 
-    // 驚醒抖一下
+    // 驚醒：彈起 → 抖動 → 回正（0.55 秒）
     if (startled >= 0) {
       startled += dt;
-      const k = Math.max(0, 1 - startled / 0.45);
-      hop.rotation.z += 0.05 * Math.sin(startled * 55) * k;
-      if (startled > 0.5) startled = -1;
+      const st = startled;
+      let lift = 0, back = 0, shake = 0, eyeK = 0;
+      if (st < 0.12) { const k = st / 0.12; lift = 0.075 * k; back = -0.14 * k; eyeK = 1 + 0.30 * k; }
+      else if (st < 0.34) {
+        const k = (st - 0.12) / 0.22;
+        lift = 0.075 * (1 - k); back = -0.14 * (1 - k * 0.6);
+        shake = 0.055 * Math.sin(st * 78) * (1 - k);
+        eyeK = 1.30 - 0.15 * k;
+      } else {
+        const k = Math.min((st - 0.34) / 0.21, 1);
+        back = -0.056 * (1 - k);
+        eyeK = 1.15 - 0.15 * k;
+      }
+      window.__lift = lift;
+      hop.rotation.z += shake;
+      if (window.__headRotate) window.__headRotate(0, back + 0.05);
+      if (MODE !== 'sleep' && MODE !== 'night') setEyeOpen(eyeK);
+      if (st > 0.55) { startled = -1; window.__lift = 0; if (window.__headRotate) window.__headRotate(0, 0); setEyeOpen(1); }
     }
 
     // 待機 30 秒（任何點擊或拖曳都重新計時）→ 打哈欠 → 睡著
@@ -566,7 +582,7 @@ function tick(){
       const BODY_A = (MODE === 'overspend' || yawnT >= 0) ? 0.006 : (nightOrSleep ? 0.013 : 0.030);
       const ph0 = t * Math.PI * 2 / FT2;
       if (window.__body) {
-        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * Math.sin(ph0);
+        window.__body.position.y = (window.__bodyBaseY || 0) + BODY_A * (0.76 * Math.sin(ph0) + 0.24 * Math.sin(t * Math.PI * 2 / 7.3 + 1.1));
       }
       // 點三下：晃晃耳朵（小而快、兩邊同步、2.5 下）
       let sw0 = 0, sw1 = 0;
@@ -578,11 +594,24 @@ function tick(){
         if (p >= 1) { hairSwingT = -1; }
         else { sw0 = sw1 = AMP * Math.sin(p * Math.PI * 2 * CYCLES) * Math.pow(1 - p, 1.5); }
       }
+      // 跳躍跟隨動作：起飛/落地時頭髮慢 70ms 彈一下
+      let lagSw = 0;
+      if (hairLagT >= 0) {
+        hairLagT += dt;
+        const lt = Math.max(0, hairLagT - 0.07);
+        lagSw = hairLagAmp * Math.sin(lt * 26) * Math.exp(-lt * 7.5);
+        if (hairLagT > 0.8) hairLagT = -1;
+      }
+      if (hairSwingT >= 0) {
+        const q = hairSwingT / 0.62 - 0.04 / 0.62;      // 第二邊錯開 40ms
+        if (q > 0 && q < 1) sw1 = 0.157 * Math.sin(q * Math.PI * 4.0) * Math.pow(1 - q, 1.5);
+        else sw1 = 0;
+      }
       parts.hair.forEach((h, i) => {
         const g = h.userData.pivot;
         if (!g) return;
         // 只旋轉、不位移 → 頭髮根部永遠黏在頭上
-        g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0)) * g.userData.innerSign;
+        g.rotation.z = (0.010 * Math.sin(ph0) + (hairSwingT >= 0 ? (i ? sw1 : sw0) : 0) + lagSw) * g.userData.innerSign;
       });
       // 綠色長條：慢半拍、幅度一半
       (parts.greenHair || []).forEach((e, i) => {
@@ -619,11 +648,12 @@ function tick(){
         if (g.userData.baseY === undefined) g.userData.baseY = g.position.y;
         if (g.userData.baseZ === undefined) g.userData.baseZ = g.position.z;
         const swing = Math.sin(waveT * 9.5);
+        const anti = p < 0.10 ? -0.42 * Math.sin(p / 0.10 * Math.PI) : 0;   // 預備：先往下沉
         // i 版：往斜上舉到胸口外側（不往前伸），只做小幅左右擺
-        g.rotation.z = (-0.26 + swing * 0.07) * env2 * -g.userData.innerSign;
+        g.rotation.z = ((-0.26 + swing * 0.07) * env2 + anti * 0.10) * -g.userData.innerSign;
         g.rotation.x = (-0.10 + swing * 0.03) * env2;
         g.position.x = g.userData.baseX - g.userData.innerSign * 0.022 * env2;
-        g.position.y = g.userData.baseY + (0.022 + swing * 0.008) * env2;
+        g.position.y = g.userData.baseY + (0.022 + swing * 0.008) * env2 + anti * 0.018;
         g.position.z = g.userData.baseZ + 0.030 * env2;
       }
       hop.rotation.z = 0.020 * env2;
@@ -640,13 +670,14 @@ function tick(){
     if (!FREEZE) {
       if (jumpPhase === 'crouch') {
         crouchT += dt;
-        const k = Math.min(crouchT / 0.09, 1);
+        const kk = Math.min(crouchT / 0.09, 1);
+        const k = 1 - Math.pow(1 - kk, 2.2);          // ease-out：先快後慢（蓄力）
         squash = 0.13 * k; squashV = 0;                 // 蹲：壓扁
-        if (k >= 1) { jumpPhase = 'air'; jumpV = 3.2; squash = -0.07; squashV = 0; }  // 起飛：拉長
+        if (kk >= 1) { jumpPhase = 'air'; jumpV = 3.2; squash = -0.07; squashV = 0; hairLagT = 0; hairLagAmp = 0.055; }  // 起飛：拉長
       } else if (jumpPhase === 'air') {
         jumpV -= 11.0 * dt;
         jumpY += jumpV * dt;
-        if (jumpY <= 0) { jumpY = 0; jumpV = 0; hop.position.y = 0; jumpPhase = 'idle'; squash = 0.20; squashV = 0; }
+        if (jumpY <= 0) { jumpY = 0; jumpV = 0; hop.position.y = 0; jumpPhase = 'idle'; squash = 0.20; squashV = 0; hairLagT = 0; hairLagAmp = 0.085; }
         else hop.position.y = jumpY;   // 落地：壓縮後由彈簧回彈
       }
     }
@@ -657,6 +688,8 @@ function tick(){
     squash = THREE.MathUtils.clamp(squash, -0.20, 0.22);
     hop.scale.x *= 1 + squash * 0.30;
     hop.scale.y *= 1 - squash * 0.34;
+    // 腳底釘住：擠壓時把整隻往上/下補償，腳不會離地或穿地
+    if (window.__YB !== undefined) hop.position.y = jumpY + window.__YB * (baseScale - hop.scale.y) + (window.__lift || 0);
     if (Q.has('jit')) {
       const by = (window.__body ? window.__body.position.y : 0);
       window.__jb = window.__jb || {prev: by, max: 0, sum: 0, n: 0, prevT: t};
@@ -693,6 +726,36 @@ function tick(){
         if (blinkT > d) { blinkT = -1; setEyeOpen(1); }
       }
       }
+    }
+
+    // 汗滴
+    if (MODE === 'overspend') {
+      buildSweat();
+      if (sweat) {
+        const cyc = (t % 3.2) / 3.2;
+        sweat.visible = true;
+        sweat.position.set(0.30, 0.42 - cyc * 0.34, 0.55);
+        sweat.scale.set(0.8, 1.15 + cyc * 0.5, 0.8);
+        sweat.material.opacity = 0.9 * (1 - Math.max(0, (cyc - 0.75) / 0.25));
+      }
+    } else if (sweat) sweat.visible = false;
+
+    // 超支慌張：頭左右快速小幅擺動 + 身體細抖 + 每 4 秒縮一下
+    if (MODE === 'overspend') {
+      if (window.__headRotate) window.__headRotate(0.075 * Math.sin(t * 15.7), 0.20 + 0.03 * Math.sin(t * 9.4));
+      hop.position.x = 0.008 * Math.sin(t * 31.0);
+      const cyc = (t % 4.0) / 4.0;
+      if (cyc < 0.05) squash = Math.max(squash, 0.07 * Math.sin(cyc / 0.05 * Math.PI));
+    }
+
+    // 打盹：頭緩慢沉下去、快速抬起來（週期 3.6 秒）
+    if ((MODE === 'sleep' || MODE === 'night') && performance.now() > snoozeUntil) {
+      const cyc = (t % 3.6) / 3.6;
+      let nod;
+      if (cyc < 0.66) nod = Math.pow(Math.sin(cyc / 0.66 * Math.PI / 2), 1.4);   // 0→1 慢慢沉
+      else if (cyc < 0.72) nod = 1 - (cyc - 0.66) / 0.06;                        // 0.22 秒快速抬
+      else nod = 0;
+      if (window.__headRotate) window.__headRotate(0, 0.10 + 0.085 * nod);
     }
 
     // 睡回去（snooze 到期）
@@ -754,53 +817,114 @@ function buildSky() {
   scene.add(sky);
 }
 
+function makeStrandTex() {
+  const cv = document.createElement('canvas'); cv.width = 64; cv.height = 64;
+  const c = cv.getContext('2d');
+  c.clearRect(0, 0, 64, 64);
+  for (let i = 0; i < 220; i++) {
+    const x = Math.random() * 64, y = Math.random() * 64;
+    const l = 3 + Math.random() * 7;
+    c.strokeStyle = `rgba(255,${170 + Math.random() * 50 | 0},${210 + Math.random() * 30 | 0},${0.25 + Math.random() * 0.45})`;
+    c.lineWidth = 0.8 + Math.random() * 0.9;
+    c.beginPath(); c.moveTo(x, y); c.lineTo(x + (Math.random() - 0.5) * 3, y + l); c.stroke();
+  }
+  const t = new THREE.CanvasTexture(cv);
+  t.wrapS = t.wrapT = THREE.RepeatWrapping;
+  t.repeat.set(6, 3);
+  t.colorSpace = THREE.SRGBColorSpace;
+  return t;
+}
+
+function noiseDisplace(geo, amp) {
+  const p = geo.attributes.position;
+  const n = geo.attributes.normal;
+  for (let i = 0; i < p.count; i++) {
+    const k = amp * (Math.random() - 0.5) * 2;
+    p.setXYZ(i, p.getX(i) + n.getX(i) * k, p.getY(i) + n.getY(i) * k, p.getZ(i) + n.getZ(i) * k);
+  }
+  p.needsUpdate = true;
+  geo.computeVertexNormals();
+  return geo;
+}
+
 function buildCap() {
   if (cap || !parts.head) return;
   const bb = new THREE.Box3().setFromObject(parts.head);
   const topWorld = new THREE.Vector3((bb.min.x + bb.max.x) / 2, bb.max.y, (bb.min.z + bb.max.z) / 2);
   const local = window.__body.worldToLocal(topWorld.clone());
-  const pink  = new THREE.MeshStandardMaterial({ color: 0xff9ecb, roughness: 1.0, flatShading: true });
-  const fluff = new THREE.MeshStandardMaterial({ color: 0xffb3d6, roughness: 1.0, flatShading: true });
-  const white = new THREE.MeshStandardMaterial({ color: 0xfff6fa, roughness: 1.0, flatShading: true });
-  cap = new THREE.Group();
-  const cone = new THREE.Mesh(new THREE.ConeGeometry(0.46, 0.66, 14, 1), pink);
-  cone.position.y = 0.30;
-  const band = new THREE.Mesh(new THREE.CylinderGeometry(0.47, 0.47, 0.12, 14, 1, true), pink);
-  band.position.y = 0.02;
-  const pom = new THREE.Mesh(new THREE.SphereGeometry(0.115, 12, 9), white);
-  pom.position.y = 0.66;
-  cap.add(cone, band, pom);
+  const pink  = new THREE.MeshStandardMaterial({ color: 0xffa8cf, roughness: 1.0, flatShading: true });
+  const white = new THREE.MeshStandardMaterial({ color: 0xfff8fb, roughness: 1.0, flatShading: true });
 
-  // 絨毛：帽身外層撒小球（合併成一個幾何，效能影響很小）
-  const pieces = [];
-  const pomG = [];
-  for (let i = 0; i < 240; i++) {
+  /* ── A：絨毛殼層 + 頂點噪音 ── */
+  const capA = new THREE.Group();
+  const baseGeo = new THREE.ConeGeometry(0.58, 0.66, 34, 18, true);
+  const bodyGeo = noiseDisplace(baseGeo.clone(), 0.030);
+  const coneA = new THREE.Mesh(bodyGeo, pink);
+  coneA.position.y = 0.30;
+  const bandA = new THREE.Mesh(noiseDisplace(new THREE.CylinderGeometry(0.59, 0.60, 0.15, 34, 5, true), 0.018), pink);
+  bandA.position.y = 0.02;
+  capA.add(coneA, bandA);
+  const strandTex = makeStrandTex();
+  [1.03, 1.07, 1.11, 1.16].forEach((sc, idx) => {
+    const sg = new THREE.ConeGeometry(0.58 * sc, 0.66 * sc, 34, 12, true);
+    const shell = new THREE.Mesh(sg, new THREE.MeshStandardMaterial({
+      color: 0xffc6e0, map: strandTex, transparent: true, opacity: 0.80 - idx * 0.16,
+      roughness: 1, flatShading: true, depthWrite: false, side: THREE.DoubleSide,
+    }));
+    shell.position.y = 0.30;
+    capA.add(shell);
+    const bandShell = new THREE.Mesh(new THREE.CylinderGeometry(0.59 * sc, 0.60 * sc, 0.15, 34, 3, true),
+      new THREE.MeshStandardMaterial({ color: 0xffc6e0, map: strandTex, transparent: true, opacity: 0.65 - idx * 0.12, roughness: 1, depthWrite: false, side: THREE.DoubleSide }));
+    bandShell.position.y = 0.02;
+    capA.add(bandShell);
+  });
+  const pomA = new THREE.Mesh(noiseDisplace(new THREE.SphereGeometry(0.15, 22, 16), 0.022), white);
+  pomA.position.y = 0.68;
+  capA.add(pomA);
+  [1.07, 1.15].forEach((sc, i2) => {
+    const sh = new THREE.Mesh(new THREE.SphereGeometry(0.15 * sc, 20, 14),
+      new THREE.MeshStandardMaterial({ color: 0xffffff, map: strandTex, transparent: true, opacity: 0.75 - i2 * 0.22, roughness: 1, depthWrite: false }));
+    sh.position.y = 0.68;
+    capA.add(sh);
+  });
+
+  /* ── C：幾何毛髮（細圓柱一根一根） ── */
+  const capC = new THREE.Group();
+  const coneC = new THREE.Mesh(new THREE.ConeGeometry(0.57, 0.64, 26, 1), pink);
+  coneC.position.y = 0.30;
+  const bandC = new THREE.Mesh(new THREE.CylinderGeometry(0.58, 0.59, 0.14, 26, 1, true), pink);
+  bandC.position.y = 0.02;
+  capC.add(coneC, bandC);
+  const hairs = [];
+  const N = 900;
+  for (let i = 0; i < N; i++) {
+    const hh = Math.pow(Math.random(), 0.7);            // 0 底 1 尖
     const ang = Math.random() * Math.PI * 2;
-    const hh = Math.pow(Math.random(), 0.75);          // 底部密一點
-    const rr = 0.455 * (1 - hh) + 0.015;
-    const sc = 0.011 + Math.random() * 0.010;
-    const g = new THREE.SphereGeometry(sc, 6, 5);
-    g.translate(Math.cos(ang) * rr, 0.02 + hh * 0.60, Math.sin(ang) * rr);
-    pieces.push(g);
+    const rr = 0.57 * (1 - hh) + 0.01;
+    const len = 0.016 + Math.random() * 0.020;
+    const g = new THREE.CylinderGeometry(0.0032, 0.0016, len, 3, 1, true);
+    g.rotateZ((Math.random() - 0.5) * 1.2);
+    g.rotateX((Math.random() - 0.5) * 1.2);
+    g.translate(Math.cos(ang) * rr, 0.02 + hh * 0.60 + len * 0.35, Math.sin(ang) * rr);
+    hairs.push(g);
   }
-  for (let i = 0; i < 26; i++) {                        // 帽沿一圈
-    const ang = i / 26 * Math.PI * 2;
-    const g = new THREE.SphereGeometry(0.032, 6, 5);
-    g.translate(Math.cos(ang) * 0.47, 0.0, Math.sin(ang) * 0.47);
-    pieces.push(g);
-  }
-  for (let i = 0; i < 34; i++) {                        // 毛球表面（白色絨毛）
+  const hairGeo = mergeGeometries(hairs, false);
+  if (hairGeo) capC.add(new THREE.Mesh(hairGeo, new THREE.MeshStandardMaterial({ color: 0xffc2de, roughness: 1, flatShading: true })));
+  const pomCgeo = [];
+  for (let i = 0; i < 260; i++) {
     const ang = Math.random() * Math.PI * 2, ph = Math.acos(2 * Math.random() - 1);
-    const rr = 0.112;
-    const g = new THREE.SphereGeometry(0.013 + Math.random() * 0.008, 6, 5);
-    g.translate(Math.cos(ang) * Math.sin(ph) * rr, 0.66 + Math.cos(ph) * rr, Math.sin(ang) * Math.sin(ph) * rr);
-    pomG.push(g);
+    const g = new THREE.CylinderGeometry(0.003, 0.0016, 0.02 + Math.random() * 0.015, 3, 1, true);
+    const r0 = 0.145;
+    g.translate(Math.cos(ang) * r0, 0.68 + Math.cos(ph) * r0, Math.sin(ang) * r0);
+    pomCgeo.push(g);
   }
-  const merged = mergeGeometries(pieces, false);
-  if (merged) cap.add(new THREE.Mesh(merged, fluff));
-  const mergedPom = mergeGeometries(pomG, false);
-  if (mergedPom) cap.add(new THREE.Mesh(mergedPom, white));
+  const pomGeo = mergeGeometries(pomCgeo, false);
+  if (pomGeo) capC.add(new THREE.Mesh(pomGeo, white));
 
+  cap = new THREE.Group();
+  cap.add(capA, capC);
+  capC.visible = false;
+  cap.userData.A = capA; cap.userData.C = capC;
   cap.position.set(local.x, local.y - 0.05, local.z);
   cap.rotation.z = 0.14;
   cap.scale.setScalar(1 / (baseScale || 1));
@@ -813,10 +937,10 @@ const bubbles = [];
 let bubbleT = -1, snoozeUntil = 0, startled = -1;
 function spawnBubble() {
   if (!window.__body) return;
-  const r = 0.085 + Math.random() * 0.03;
+  const r = 0.055 + Math.random() * 0.025;
   const mat = new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.42, depthWrite: false });
   const m = new THREE.Mesh(new THREE.SphereGeometry(r, 12, 9), mat);
-  m.position.set(0.25 + Math.random() * 0.06, 0.10, 0.58);
+  m.position.set(0.44 + Math.random() * 0.10, 0.02, 0.50);
   m.userData = { life: 0, dur: 2.6, alive: true, popT: -1 };
   const hi = new THREE.Mesh(new THREE.SphereGeometry(r * 0.28, 8, 6),
     new THREE.MeshBasicMaterial({ color: 0xffffff, transparent: true, opacity: 0.9, depthWrite: false }));
@@ -849,6 +973,24 @@ function startleWake() {
   wakeT = 0; startled = 0; idleT = 0;
   expr = 'neutral'; applyExpression(true);
   if (window.__headRotate) window.__headRotate(0, 0);
+}
+
+function setHat(v) {
+  buildCap();
+  if (!cap) return;
+  cap.userData.A.visible = (v === 'A');
+  cap.userData.C.visible = (v === 'C');
+}
+window.__setHat = setHat;
+
+let sweat = null;
+function buildSweat() {
+  if (sweat || !parts.head) return;
+  const mat = new THREE.MeshStandardMaterial({ color: 0x9fd8f5, roughness: 0.25, metalness: 0.05, transparent: true, opacity: 0.9, flatShading: true });
+  sweat = new THREE.Mesh(new THREE.SphereGeometry(0.055, 10, 8), mat);
+  sweat.scale.set(0.8, 1.15, 0.8);
+  sweat.visible = false;
+  window.__body.add(sweat);
 }
 
 function enterSleep() {
@@ -915,6 +1057,8 @@ window.__setMode = setMode;
   mk('晃耳朵', () => { hairSwingT = 0; });
   mk('揮手', () => { waveT = 0; expr = 'smile'; applyExpression(true); });
   mk('跳', () => { if (jumpPhase === 'idle' && jumpY <= 0.001) { jumpPhase = 'crouch'; crouchT = 0; } });
+  mk('帽子A', () => { setMode('night'); setHat('A'); });
+  mk('帽子C', () => { setMode('night'); setHat('C'); });
   document.body.appendChild(bar);
   // 把原本的說明文字往上移
   const hint = document.querySelector('.hint, #hint');
